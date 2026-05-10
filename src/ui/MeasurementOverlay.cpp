@@ -34,7 +34,13 @@ void MeasurementOverlay::setScale(double umPerPixel) { m_umPerPixel = umPerPixel
 
 void MeasurementOverlay::addPoint(const QPointF &imagePt)
 {
-    if (m_state == State::Idle || m_state == State::Done) return;
+    if (m_state == State::Idle) return;
+
+    if (m_state == State::Done) {
+        m_points.clear();
+        m_resultText.clear();
+        m_state = State::WaitPoint1;
+    }
 
     m_points.append(imagePt);
 
@@ -128,6 +134,18 @@ QPointF MeasurementOverlay::imageToWidget(const QPointF &pt, const QRectF &wr,
 }
 
 // ---------------------------------------------------------------------------
+// Painting helpers
+// ---------------------------------------------------------------------------
+
+static void drawShadowText(QPainter &p, const QPointF &pos, const QString &text)
+{
+    p.setPen(QColor(0, 0, 0, 210));
+    p.drawText(pos + QPointF(1, 1), text);
+    p.setPen(Qt::white);
+    p.drawText(pos, text);
+}
+
+// ---------------------------------------------------------------------------
 // Painting
 // ---------------------------------------------------------------------------
 
@@ -147,8 +165,9 @@ void MeasurementOverlay::paint(QPainter &painter, const QRectF &widgetRect,
 void MeasurementOverlay::paintDistance(QPainter &p, const QRectF &wr,
                                         const QSizeF &sz) const
 {
-    const QPen linePen(Qt::yellow, 1.5, Qt::SolidLine);
-    const QPen dotPen (Qt::red,    5,   Qt::SolidLine);
+    const bool done = (m_state == State::Done);
+    const QPen linePen(Qt::yellow, done ? 2.5 : 1.5, Qt::SolidLine);
+    const QPen dotPen (Qt::red,    done ? 7   : 5,   Qt::SolidLine);
     p.setPen(dotPen);
 
     QVector<QPointF> wPts;
@@ -164,8 +183,7 @@ void MeasurementOverlay::paintDistance(QPainter &p, const QRectF &wr,
 
         if (!m_resultText.isEmpty()) {
             const QPointF mid = (wPts[0] + wPts[1]) / 2.0;
-            p.setPen(Qt::white);
-            p.drawText(mid + QPointF(4, -4), m_resultText);
+            drawShadowText(p, mid + QPointF(4, -4), m_resultText);
         }
     }
 }
@@ -173,8 +191,9 @@ void MeasurementOverlay::paintDistance(QPainter &p, const QRectF &wr,
 void MeasurementOverlay::paintAngle(QPainter &p, const QRectF &wr,
                                      const QSizeF &sz) const
 {
-    const QPen linePen(Qt::cyan, 1.5);
-    const QPen dotPen (Qt::red,  5);
+    const bool done = (m_state == State::Done);
+    const QPen linePen(Qt::cyan, done ? 2.5 : 1.5);
+    const QPen dotPen (Qt::red,  done ? 7   : 5);
 
     QVector<QPointF> wPts;
     for (const auto &ip : m_points)
@@ -189,18 +208,17 @@ void MeasurementOverlay::paintAngle(QPainter &p, const QRectF &wr,
     }
     if (wPts.size() >= 3) {
         p.drawLine(wPts[0], wPts[2]);
-        if (!m_resultText.isEmpty()) {
-            p.setPen(Qt::white);
-            p.drawText(wPts[0] + QPointF(6, -6), m_resultText);
-        }
+        if (!m_resultText.isEmpty())
+            drawShadowText(p, wPts[0] + QPointF(6, -6), m_resultText);
     }
 }
 
 void MeasurementOverlay::paintRadius(QPainter &p, const QRectF &wr,
                                       const QSizeF &sz) const
 {
-    const QPen linePen(Qt::green, 1.5);
-    const QPen dotPen (Qt::red,   5);
+    const bool done = (m_state == State::Done);
+    const QPen linePen(Qt::green, done ? 2.5 : 1.5);
+    const QPen dotPen (Qt::red,   done ? 7   : 5);
 
     QVector<QPointF> wPts;
     for (const auto &ip : m_points)
@@ -231,10 +249,8 @@ void MeasurementOverlay::paintRadius(QPainter &p, const QRectF &wr,
                 const double rw = r_px * wr.width() / sz.width();
                 p.drawEllipse(center, rw, rw);
 
-                if (!m_resultText.isEmpty()) {
-                    p.setPen(Qt::white);
-                    p.drawText(center + QPointF(4, -4), m_resultText);
-                }
+                if (!m_resultText.isEmpty())
+                    drawShadowText(p, center + QPointF(4, -4), m_resultText);
             }
         }
     }

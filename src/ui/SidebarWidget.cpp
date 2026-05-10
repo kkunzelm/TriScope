@@ -172,11 +172,15 @@ void SidebarWidget::buildStageConnectSection(QGroupBox *gb)
 
     auto *connRow = new QHBoxLayout;
     m_portCombo = new QComboBox(gb);
+    auto *portRefreshBtn = new QPushButton(tr("↺"), gb);
+    portRefreshBtn->setFixedWidth(28);
+    portRefreshBtn->setToolTip(tr("Refresh port list"));
     m_stageTypeCombo = new QComboBox(gb);
     m_stageTypeCombo->addItem(tr("LStep 23"),    QStringLiteral("lstep"));
     m_stageTypeCombo->addItem(tr("DIY Stepper"), QStringLiteral("diy"));
     m_stageTypeCombo->setFixedWidth(90);
     connRow->addWidget(m_portCombo, 1);
+    connRow->addWidget(portRefreshBtn);
     connRow->addWidget(m_stageTypeCombo);
     lay->addLayout(connRow);
 
@@ -188,6 +192,8 @@ void SidebarWidget::buildStageConnectSection(QGroupBox *gb)
     auto *measBtn = new QPushButton(tr("Measure Range"),    gb);
     lay->addWidget(calBtn);
     lay->addWidget(measBtn);
+
+    connect(portRefreshBtn, &QPushButton::clicked, this, &SidebarWidget::refreshPortList);
 
     connect(m_connectBtn, &QPushButton::toggled, this, [this](bool on) {
         m_connectBtn->setText(on ? tr("Disconnect") : tr("Connect"));
@@ -439,7 +445,7 @@ void SidebarWidget::refreshPortList()
     const QString current = m_portCombo->currentText();
     m_portCombo->clear();
     for (const auto &info : QSerialPortInfo::availablePorts())
-        m_portCombo->addItem(info.portName());
+        m_portCombo->addItem(info.systemLocation());
     if (!current.isEmpty()) {
         const int idx = m_portCombo->findText(current);
         if (idx >= 0) m_portCombo->setCurrentIndex(idx);
