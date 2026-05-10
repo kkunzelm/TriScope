@@ -229,12 +229,26 @@ void LStepStage::calibrate()
 
     enqueueMove(mcl3(0x07, "c"),       // 'c' = Calibrate (home)
         [this](const QByteArray &resp) {
-            // Restore normal motion parameters
-            enqueueWrite(mcl3(0x09, "50"));
-            enqueueWrite(mcl3(0x08, "500"));
-            m_position = {0, 0, 0};
-            emit positionChanged(0, 0, 0);
-            emit movementFinished(QString::fromLatin1(resp));
+            // After homing, Z is parked on the null switch with the EM brake fully
+            // engaged.  Any subsequent caller using default Speed/Ramp (500) will
+            // stall Z because the ramp is too steep for the brake to release.
+            // Move Z 1 mm away from the switch (+1000 hardware units = +1 mm in the
+            // hardware-positive/stage-down direction) so the brake disengages and the
+            // controller is in the same state as after a power-cycle (stage mid-range).
+            enqueueWrite(mcl3(0x09, "20"));              // Speed = 20 (slow, brake-safe)
+            enqueueWrite(mcl3(0x08, "200"));             // Ramp  = 200 (gentle)
+            enqueueWrite(mcl3(0x0B, "4"));               // ActiveAxes = Z only
+            enqueueWrite(mcl3(0x02, QString::number(mmToUnits(1.0))));  // Z presel = +1 mm
+            enqueueMove(mcl3(0x07, "v"),                 // 'v' = MoveRelative
+                [this, resp](const QByteArray &) {
+                    enqueueWrite(mcl3(0x09, "50"));      // Restore Speed
+                    enqueueWrite(mcl3(0x08, "500"));     // Restore Ramp
+                    enqueueWrite(mcl3(0x0B, "7"));       // Restore ActiveAxes = XYZ
+                    m_position = {0, 0, 0};
+                    emit positionChanged(0, 0, 0);
+                    emit movementFinished(QString::fromLatin1(resp));
+                    // Poll timer will update position display within 500 ms
+                }, 10000);
         }, 60000);
 }
 
