@@ -100,6 +100,16 @@ private:
     QRadioButton    *m_unitUm        = nullptr;
     bool             m_showUm        = false;
 
+    // Table measurement (relative XY)
+    QPushButton     *m_setOriginBtn  = nullptr;
+    QLabel          *m_relLabelX     = nullptr;
+    QLabel          *m_relLabelY     = nullptr;
+    double           m_absX          = 0.0;
+    double           m_absY          = 0.0;
+    double           m_originX       = 0.0;
+    double           m_originY       = 0.0;
+    bool             m_originSet     = false;
+
     // Measurement calibration
     QDoubleSpinBox  *m_calPixSpin    = nullptr;
     QDoubleSpinBox  *m_calUmSpin     = nullptr;

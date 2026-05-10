@@ -39,8 +39,8 @@ SidebarWidget::SidebarWidget(QWidget *parent)
     root->addWidget(measureGb);
     root->addStretch();
 
-    setMinimumWidth(240);
-    setMaximumWidth(300);
+    setMinimumWidth(300);
+    setMaximumWidth(380);
     refreshPortList();
 }
 
@@ -187,6 +187,27 @@ void SidebarWidget::buildStageSection(QGroupBox *gb)
     posGrid->addWidget(m_posLabelZ, 2, 1);
     lay->addLayout(posGrid);
 
+    // Table measurement: set origin and show relative XY displacement
+    m_setOriginBtn = new QPushButton(tr("Set Origin (Zero ΔX/ΔY)"), gb);
+    lay->addWidget(m_setOriginBtn);
+
+    auto *relGrid = new QGridLayout;
+    relGrid->addWidget(new QLabel(tr("ΔX:"), gb), 0, 0);
+    m_relLabelX = new QLabel(tr("—"), gb);
+    relGrid->addWidget(m_relLabelX, 0, 1);
+    relGrid->addWidget(new QLabel(tr("ΔY:"), gb), 1, 0);
+    m_relLabelY = new QLabel(tr("—"), gb);
+    relGrid->addWidget(m_relLabelY, 1, 1);
+    lay->addLayout(relGrid);
+
+    connect(m_setOriginBtn, &QPushButton::clicked, this, [this] {
+        m_originX   = m_absX;
+        m_originY   = m_absY;
+        m_originSet = true;
+        m_relLabelX->setText(formatPosition(0.0));
+        m_relLabelY->setText(formatPosition(0.0));
+    });
+
     // Jog step selector
     auto *stepRow = new QHBoxLayout;
     stepRow->addWidget(new QLabel(tr("Step:"), gb));
@@ -273,16 +294,17 @@ void SidebarWidget::buildMeasureSection(QGroupBox *gb)
 {
     auto *lay = new QVBoxLayout(gb);
 
-    auto *toolRow = new QHBoxLayout;
+    // 2×2 grid so "Distance" isn't clipped in a too-narrow single row
     auto *distBtn  = new QPushButton(tr("Distance"), gb);
     auto *angleBtn = new QPushButton(tr("Angle"),    gb);
     auto *radBtn   = new QPushButton(tr("Radius"),   gb);
     auto *clrBtn   = new QPushButton(tr("Clear"),    gb);
-    toolRow->addWidget(distBtn);
-    toolRow->addWidget(angleBtn);
-    toolRow->addWidget(radBtn);
-    toolRow->addWidget(clrBtn);
-    lay->addLayout(toolRow);
+    auto *toolGrid = new QGridLayout;
+    toolGrid->addWidget(distBtn,  0, 0);
+    toolGrid->addWidget(angleBtn, 0, 1);
+    toolGrid->addWidget(radBtn,   1, 0);
+    toolGrid->addWidget(clrBtn,   1, 1);
+    lay->addLayout(toolGrid);
 
     // Calibration row
     lay->addWidget(new QLabel(tr("Calibration:"), gb));
@@ -349,9 +371,15 @@ void SidebarWidget::updateCameraControls(const CameraControls &ctrl,
 
 void SidebarWidget::updatePosition(double x, double y, double z)
 {
+    m_absX = x;
+    m_absY = y;
     m_posLabelX->setText(formatPosition(x));
     m_posLabelY->setText(formatPosition(y));
     m_posLabelZ->setText(formatPosition(z));
+    if (m_originSet) {
+        m_relLabelX->setText(formatPosition(x - m_originX));
+        m_relLabelY->setText(formatPosition(y - m_originY));
+    }
 }
 
 void SidebarWidget::refreshPortList()

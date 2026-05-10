@@ -174,8 +174,8 @@ void LStepStage::moveRelative(double swDx, double swDy, double swDz)
     const bool zOnly = (swDx == 0.0 && swDy == 0.0 && swDz != 0.0);
 
     if (zOnly) {
-        enqueueWrite(mcl3(0x09, "5"));                   // Speed = 5 U/s
-        enqueueWrite(mcl3(0x08, "5"));                   // Ramp  = 5 mm/s²
+        enqueueWrite(mcl3(0x09, "20"));                  // Speed = 20 U/s
+        enqueueWrite(mcl3(0x08, "200"));                 // Ramp  = 200 (doc-recommended for Z brake)
         enqueueWrite(mcl3(0x02, QString::number(hwDz))); // Preselection Z
         enqueueWrite(mcl3(0x0B, "4"));                   // ActiveAxes = Z only
     } else {
@@ -188,9 +188,9 @@ void LStepStage::moveRelative(double swDx, double swDy, double swDz)
     enqueueMove(mcl3(0x07, "v"),                         // 'v' = MoveRelative
         [this, zOnly](const QByteArray &resp) {
             if (zOnly) {
-                enqueueWrite(mcl3(0x09, "50"));  // Restore Speed
-                enqueueWrite(mcl3(0x08, "500")); // Restore Ramp
-                enqueueWrite(mcl3(0x0B, "7"));   // Restore ActiveAxes = XYZ
+                enqueueWrite(mcl3(0x09, "50"));   // Restore Speed = 50
+                enqueueWrite(mcl3(0x08, "500"));  // Restore Ramp  = 500
+                enqueueWrite(mcl3(0x0B, "7"));    // Restore ActiveAxes = XYZ
             }
             emit movementFinished(QString::fromLatin1(resp));
             enqueuePositionQuery();

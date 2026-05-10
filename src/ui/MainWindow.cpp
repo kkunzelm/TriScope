@@ -16,6 +16,7 @@
 #include <QMenuBar>
 #include <QMenu>
 #include <QApplication>
+#include <QScreen>
 #include <QThread>
 #include <QMessageBox>
 #include <QLabel>
@@ -24,7 +25,15 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     setWindowTitle(tr("Video Measuring Microscope"));
-    resize(1280, 800);
+    // Size to ~90 % of available screen so all sidebar items are visible without manual resizing
+    if (const auto *screen = QApplication::primaryScreen()) {
+        const QRect avail = screen->availableGeometry();
+        resize(qMin(1500, avail.width()  - 80),
+               qMin(1000, avail.height() - 60));
+        move(avail.topLeft() + QPoint(40, 30));
+    } else {
+        resize(1280, 900);
+    }
 
     // ---- Discovery ----
     m_discovery = new CameraDiscovery(this);
@@ -37,7 +46,7 @@ MainWindow::MainWindow(QWidget *parent)
     scrollArea->setWidget(m_sidebar);
     scrollArea->setWidgetResizable(true);
     scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scrollArea->setMaximumWidth(310);
+    scrollArea->setMaximumWidth(400);
     splitter->addWidget(scrollArea);
 
     m_cameraView = new CameraView(this);
