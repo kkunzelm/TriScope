@@ -6,9 +6,11 @@
 #include "scanner/processing/LaserLineExtractor.h"
 #include "scanner/export/PlyWriter.h"
 
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QPushButton>
+#include <QGroupBox>
 #include <QProgressBar>
 #include <QLabel>
 #include <QGroupBox>
@@ -60,6 +62,50 @@ ScannerTab::ScannerTab(QWidget *parent) : QWidget(parent)
 
 void ScannerTab::buildUI()
 {
+    // ── Stage control ────────────────────────────────────────────────────────
+    m_stageGroup = new QGroupBox(tr("Stage"), this);
+    auto *stageLay = new QVBoxLayout(m_stageGroup);
+
+    auto *posGrid = new QGridLayout;
+    posGrid->addWidget(new QLabel(tr("X:")), 0, 0);
+    m_posLabelX = new QLabel(tr("—"));  posGrid->addWidget(m_posLabelX, 0, 1);
+    posGrid->addWidget(new QLabel(tr("Y:")), 1, 0);
+    m_posLabelY = new QLabel(tr("—"));  posGrid->addWidget(m_posLabelY, 1, 1);
+    posGrid->addWidget(new QLabel(tr("Z:")), 2, 0);
+    m_posLabelZ = new QLabel(tr("—"));  posGrid->addWidget(m_posLabelZ, 2, 1);
+    stageLay->addLayout(posGrid);
+
+    auto *stepRow = new QHBoxLayout;
+    stepRow->addWidget(new QLabel(tr("Step:")));
+    m_jogStepCombo = new QComboBox;
+    for (double s : {0.001, 0.01, 0.1, 1.0, 10.0, 50.0})
+        m_jogStepCombo->addItem(QStringLiteral("%1 mm").arg(s), s);
+    m_jogStepCombo->setCurrentIndex(3);
+    stepRow->addWidget(m_jogStepCombo);
+    stageLay->addLayout(stepRow);
+
+    auto *jogGrid = new QGridLayout;
+    auto makeJog = [&](const QString &label, double dx, double dy, double dz) {
+        auto *btn = new QPushButton(label, m_stageGroup);
+        btn->setFixedSize(44, 28);
+        connect(btn, &QPushButton::clicked, this, [this, dx, dy, dz] {
+            if (!m_stage || m_scanning) return;
+            const double step = m_jogStepCombo->currentData().toDouble();
+            QMetaObject::invokeMethod(m_stage,
+                [s = m_stage, ddx = dx*step, ddy = dy*step, ddz = dz*step] {
+                    s->moveRelative(ddx, ddy, ddz);
+                });
+        });
+        return btn;
+    };
+    jogGrid->addWidget(makeJog(tr("+X"),  1, 0, 0), 0, 0);
+    jogGrid->addWidget(makeJog(tr("-X"), -1, 0, 0), 0, 1);
+    jogGrid->addWidget(makeJog(tr("+Y"),  0, 1, 0), 1, 0);
+    jogGrid->addWidget(makeJog(tr("-Y"),  0,-1, 0), 1, 1);
+    jogGrid->addWidget(makeJog(tr("+Z"),  0, 0, 1), 2, 0);
+    jogGrid->addWidget(makeJog(tr("-Z"),  0, 0,-1), 2, 1);
+    stageLay->addLayout(jogGrid);
+
     // ── Scan Parameters ─────────────────────────────────────────────────────
     auto *scanGroup = new QGroupBox(tr("Scan Parameters"), this);
     auto *scanForm  = new QGridLayout(scanGroup);
@@ -154,6 +200,7 @@ void ScannerTab::buildUI()
     leftPanel->setFixedWidth(380);
     auto *leftLayout = new QVBoxLayout(leftPanel);
     leftLayout->setContentsMargins(8, 8, 8, 8);
+    leftLayout->addWidget(m_stageGroup);
     leftLayout->addWidget(scanGroup);
     leftLayout->addWidget(camGroup);
     leftLayout->addWidget(outGroup);
@@ -192,12 +239,21 @@ void ScannerTab::setStage(IPositioningStage *stage)
     if (m_stage) {
         disconnect(m_stage, &IPositioningStage::movementFinished,
                    this, &ScannerTab::onStepReady);
+        disconnect(m_stage, &IPositioningStage::positionChanged,
+                   this, &ScannerTab::onPositionChanged);
     }
     m_stage = stage;
     if (m_stage) {
         connect(m_stage, &IPositioningStage::movementFinished,
                 this, &ScannerTab::onStepReady,
                 Qt::UniqueConnection);
+        connect(m_stage, &IPositioningStage::positionChanged,
+                this, &ScannerTab::onPositionChanged,
+                Qt::UniqueConnection);
+    } else {
+        m_posLabelX->setText(tr("—"));
+        m_posLabelY->setText(tr("—"));
+        m_posLabelZ->setText(tr("—"));
     }
 }
 
@@ -261,6 +317,7 @@ void ScannerTab::startScan()
     m_camera->setExposure(m_expSpin->value());
 
     m_scanning = true;
+    m_stageGroup->setDisabled(true);
     emit scanActiveChanged(true);
     m_startBtn->setText(tr("Abort"));
     m_progress->setRange(0, static_cast<int>(m_xPositions.size()));
@@ -277,8 +334,8 @@ void ScannerTab::startScan()
 void ScannerTab::abortScan()
 {
     m_scanning = false;
+    m_stageGroup->setEnabled(true);
     QMetaObject::invokeMethod(m_stage, &IPositioningStage::abort);
-    // Restore live preview
     m_acqThread->startAcquisition();
     emit scanActiveChanged(false);
     m_startBtn->setText(tr("Start Scan"));
@@ -339,6 +396,7 @@ void ScannerTab::onStepReady(const QString &)
 void ScannerTab::finishScan()
 {
     m_scanning = false;
+    m_stageGroup->setEnabled(true);
     m_acqThread->startAcquisition();
     emit scanActiveChanged(false);
     m_startBtn->setText(tr("Start Scan"));
@@ -421,6 +479,13 @@ void ScannerTab::onSaveCalib()
         QMessageBox::warning(this, tr("Scanner"), tr("Cannot write file."));
     else
         f.write(QJsonDocument(obj).toJson());
+}
+
+void ScannerTab::onPositionChanged(double x, double y, double z)
+{
+    m_posLabelX->setText(QStringLiteral("%1 mm").arg(x, 0, 'f', 3));
+    m_posLabelY->setText(QStringLiteral("%1 mm").arg(y, 0, 'f', 3));
+    m_posLabelZ->setText(QStringLiteral("%1 mm").arg(z, 0, 'f', 3));
 }
 
 scanner::CalibParams ScannerTab::currentCalib() const

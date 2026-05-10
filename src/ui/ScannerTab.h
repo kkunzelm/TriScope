@@ -8,11 +8,13 @@
 class ICameraDevice;
 class IPositioningStage;
 class AcquisitionThread;
+class QComboBox;
 class QDoubleSpinBox;
 class QSpinBox;
 class QPushButton;
 class QProgressBar;
 class QLabel;
+class QGroupBox;
 
 // Scanner tab: signal-driven stop-and-go laser triangulation scan.
 // Uses the application's existing ICameraDevice and IPositioningStage directly.
@@ -38,6 +40,7 @@ private slots:
     void onStepReady(const QString &status);
     void onLoadCalib();
     void onSaveCalib();
+    void onPositionChanged(double x, double y, double z);
 
 private:
     void buildUI();
@@ -48,6 +51,11 @@ private:
     scanner::CalibParams currentCalib() const;
 
     // ── UI ──────────────────────────────────────────────────────────────────
+    QGroupBox      *m_stageGroup  = nullptr;
+    QLabel         *m_posLabelX   = nullptr;
+    QLabel         *m_posLabelY   = nullptr;
+    QLabel         *m_posLabelZ   = nullptr;
+    QComboBox      *m_jogStepCombo = nullptr;
     QDoubleSpinBox *m_startXSpin  = nullptr;
     QDoubleSpinBox *m_endXSpin    = nullptr;
     QDoubleSpinBox *m_stepSpin    = nullptr;
