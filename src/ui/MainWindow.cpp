@@ -2,6 +2,7 @@
 
 #include "ui/CameraView.h"
 #include "ui/SidebarWidget.h"
+#include "ui/ScannerTab.h"
 #include "camera/CameraDiscovery.h"
 #include "camera/IDSPeakCamera.h"
 #include "camera/V4L2Camera.h"
@@ -12,6 +13,7 @@
 #include <QHBoxLayout>
 #include <QSplitter>
 #include <QScrollArea>
+#include <QTabWidget>
 #include <QStatusBar>
 #include <QMenuBar>
 #include <QMenu>
@@ -38,23 +40,30 @@ MainWindow::MainWindow(QWidget *parent)
     // ---- Discovery ----
     m_discovery = new CameraDiscovery(this);
 
-    // ---- Central layout: sidebar | camera view ----
-    auto *splitter = new QSplitter(Qt::Horizontal, this);
+    // ---- Tab 1: sidebar | camera view ----
+    auto *splitter = new QSplitter(Qt::Horizontal);
 
     m_sidebar = new SidebarWidget(this);
-    auto *scrollArea = new QScrollArea(this);
+    auto *scrollArea = new QScrollArea;
     scrollArea->setWidget(m_sidebar);
     scrollArea->setWidgetResizable(true);
     scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scrollArea->setMaximumWidth(400);
     splitter->addWidget(scrollArea);
 
-    m_cameraView = new CameraView(this);
+    m_cameraView = new CameraView;
     splitter->addWidget(m_cameraView);
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
 
-    setCentralWidget(splitter);
+    // ---- Tab 2: scanner ----
+    m_scannerTab = new ScannerTab(this);
+
+    // ---- Central tab widget ----
+    m_tabs = new QTabWidget(this);
+    m_tabs->addTab(splitter,      tr("Microscope"));
+    m_tabs->addTab(m_scannerTab,  tr("Scanner"));
+    setCentralWidget(m_tabs);
 
     // ---- Acquisition thread ----
     m_acqThread = new AcquisitionThread(this);
@@ -111,6 +120,10 @@ MainWindow::MainWindow(QWidget *parent)
             });
     connect(m_cameraView, &CameraView::measurementResult,
             this, [this](const QString &txt) { statusBar()->showMessage(txt, 5000); });
+
+    // Disable sidebar while a scan is running
+    connect(m_scannerTab, &ScannerTab::scanActiveChanged,
+            m_sidebar, &QWidget::setDisabled);
 
     // Initial camera list
     onCameraRefresh();
@@ -181,6 +194,7 @@ void MainWindow::onCameraSelected(const QString &id)
         m_camera->close();
     }
     m_camera = m_discovery->createCamera(id);
+    m_scannerTab->setCamera(m_camera.get(), m_acqThread);
     statusBar()->showMessage(tr("Camera selected: %1").arg(id), 2000);
 }
 
@@ -242,6 +256,7 @@ void MainWindow::onStageConnect(const QString &port, const QString &type)
     m_stage.reset(stage);
 
     connectStageSignals(stage);
+    m_scannerTab->setStage(stage);
 
     // Connect is called in the stage's thread
     QMetaObject::invokeMethod(stage, [stage, port] { stage->connect(port); });
@@ -271,6 +286,7 @@ void MainWindow::connectStageSignals(IPositioningStage *stage)
 void MainWindow::disconnectStage()
 {
     if (!m_stage) return;
+    m_scannerTab->setStage(nullptr);
     // BlockingQueuedConnection: main thread waits until disconnect() returns in
     // the stage thread. If the stage thread is mid-command (waitForBytesWritten),
     // we wait up to ~2.5 s for it to finish before the abort+close runs.

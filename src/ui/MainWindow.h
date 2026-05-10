@@ -5,10 +5,12 @@
 
 class CameraView;
 class SidebarWidget;
+class ScannerTab;
 class ICameraDevice;
 class IPositioningStage;
 class CameraDiscovery;
 class AcquisitionThread;
+class QTabWidget;
 class QThread;
 
 // Top-level application window.
@@ -48,8 +50,10 @@ private:
     void disconnectStage();
 
     // UI
+    QTabWidget    *m_tabs       = nullptr;
     CameraView    *m_cameraView = nullptr;
     SidebarWidget *m_sidebar    = nullptr;
+    ScannerTab    *m_scannerTab = nullptr;
 
     // Camera subsystem
     CameraDiscovery                  *m_discovery   = nullptr;

@@ -20,6 +20,9 @@ find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
 # ---------- Threads ----------
 find_package(Threads REQUIRED)
 
+# ---------- Eigen3 ----------
+find_package(Eigen3 REQUIRED NO_MODULE)
+
 # ---------- IDS Peak SDK ----------
 set(IDS_PEAK_ROOT "/opt/ids-peak" CACHE PATH "IDS Peak SDK installation prefix")
 
@@ -69,12 +72,17 @@ set(SOURCES
     src/ui/CameraView.cpp
     src/ui/SidebarWidget.cpp
     src/ui/MeasurementOverlay.cpp
+    src/ui/ScannerTab.cpp
+    src/scanner/processing/LaserLineExtractor.cpp
+    src/scanner/processing/Triangulator.cpp
+    src/scanner/export/PlyWriter.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/scanner
     ${OpenCV_INCLUDE_DIRS}
     ${IDS_PEAK_INCLUDE_DIRS}
 )
@@ -86,6 +94,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::SerialPort
     ${OpenCV_LIBS}
     ids_peak
+    Eigen3::Eigen
     Threads::Threads
 )
 

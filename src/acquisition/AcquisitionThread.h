@@ -21,6 +21,7 @@ public:
     void setCamera(ICameraDevice *camera);  // call before startAcquisition
     void startAcquisition();
     void stopAcquisition();
+    bool isGrabbing() const { return m_running.load(); }
 
 signals:
     void frameReady(const QImage &frame);
