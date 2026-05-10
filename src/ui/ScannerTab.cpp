@@ -4,6 +4,7 @@
 #include "interfaces/IPositioningStage.h"
 #include "acquisition/AcquisitionThread.h"
 #include "scanner/processing/LaserLineExtractor.h"
+#include "scanner/processing/Triangulator.h"
 #include "scanner/export/PlyWriter.h"
 
 #include <QComboBox>
@@ -18,7 +19,10 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QGridLayout>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFileDialog>
+#include <QInputDialog>
 #include <QMessageBox>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -174,6 +178,15 @@ void ScannerTab::buildUI()
     calibForm->addRow(tr("scale_y (mm/px):"), m_scaleYSpin);
     calibForm->addRow(tr("cx (px):"),      m_cxSpin);
     calibLayout->addLayout(calibForm);
+
+    auto *runCalibRow = new QHBoxLayout;
+    auto *calZBtn = new QPushButton(tr("Calibrate Z…"));
+    auto *calYBtn = new QPushButton(tr("Calibrate Y…"));
+    connect(calZBtn, &QPushButton::clicked, this, &ScannerTab::onCalibrateZ);
+    connect(calYBtn, &QPushButton::clicked, this, &ScannerTab::onCalibrateY);
+    runCalibRow->addWidget(calZBtn);
+    runCalibRow->addWidget(calYBtn);
+    calibLayout->addLayout(runCalibRow);
 
     auto *calibBtnRow = new QHBoxLayout;
     auto *loadCalibBtn = new QPushButton(tr("Load JSON"));
@@ -344,6 +357,42 @@ void ScannerTab::abortScan()
 
 void ScannerTab::onStepReady(const QString &)
 {
+    // ── Z calibration step ───────────────────────────────────────────────────
+    if (m_calibMode == CalibMode::CalibZ) {
+        m_statusLabel->setText(
+            tr("Z-calib: capturing point %1/%2…")
+                .arg(m_calibZCurrentStep + 1).arg(m_calibZTotalSteps));
+
+        auto maybe = m_camera->grabFrame(2000);
+        if (!maybe.has_value()) { finishCalibZ(false); return; }
+
+        const scanner::Frame frame = qImageToScannerFrame(maybe.value());
+        scanner::ExtractorParams ep;
+        ep.threshold = static_cast<uint16_t>(m_threshSpin->value());
+        const double row = meanValidRow(scanner::extractLaserProfile(frame, ep));
+        if (row < 0.0) {
+            QMessageBox::warning(this, tr("Calibrate Z"),
+                tr("No laser line at step %1 — aborting.").arg(m_calibZCurrentStep));
+            finishCalibZ(false);
+            return;
+        }
+        const double z = m_calibZStartZ + m_calibZCurrentStep * m_calibZDeltaMm;
+        m_calibZPoints.push_back({z, row});
+        m_calibZCurrentStep++;
+
+        if (m_calibZCurrentStep >= m_calibZTotalSteps) {
+            finishCalibZ(true);
+        } else {
+            m_statusLabel->setText(
+                tr("Z-calib: moving to step %1/%2…")
+                    .arg(m_calibZCurrentStep + 1).arg(m_calibZTotalSteps));
+            QMetaObject::invokeMethod(m_stage,
+                [s = m_stage, dz = m_calibZDeltaMm] { s->moveRelative(0.0, 0.0, dz); });
+        }
+        return;
+    }
+
+    // ── Normal scan step ─────────────────────────────────────────────────────
     if (!m_scanning) return;
 
     // Capture one frame
@@ -486,6 +535,221 @@ void ScannerTab::onPositionChanged(double x, double y, double z)
     m_posLabelX->setText(QStringLiteral("%1 mm").arg(x, 0, 'f', 3));
     m_posLabelY->setText(QStringLiteral("%1 mm").arg(y, 0, 'f', 3));
     m_posLabelZ->setText(QStringLiteral("%1 mm").arg(z, 0, 'f', 3));
+}
+
+// ---------------------------------------------------------------------------
+// Calibration helpers
+// ---------------------------------------------------------------------------
+
+double ScannerTab::meanValidRow(const scanner::LaserProfile &profile)
+{
+    double sum = 0.0;
+    int    n   = 0;
+    for (double r : profile.rowPositions)
+        if (r >= 0.0) { sum += r; ++n; }
+    return n > 0 ? sum / n : -1.0;
+}
+
+std::pair<double,double> ScannerTab::detectEdges(const scanner::LaserProfile &profile)
+{
+    const auto &rows = profile.rowPositions;
+    const int   sz   = static_cast<int>(rows.size());
+    if (sz < 4) return {-1.0, -1.0};
+
+    double minGrad = 0.0, maxGrad = 0.0;
+    int leftIdx = -1, rightIdx = -1;
+
+    for (int c = 0; c < sz - 1; ++c) {
+        const double r0 = rows[static_cast<std::size_t>(c)];
+        const double r1 = rows[static_cast<std::size_t>(c + 1)];
+        if (r0 < 0.0 || r1 < 0.0) continue;
+        const double g = r1 - r0;
+        if (g < minGrad) { minGrad = g; leftIdx  = c; }
+        if (g > maxGrad) { maxGrad = g; rightIdx = c; }
+    }
+
+    // Require at least a 5-pixel step to count as an edge
+    if (leftIdx < 0 || rightIdx < 0 || -minGrad < 5.0 || maxGrad < 5.0)
+        return {-1.0, -1.0};
+    if (rightIdx <= leftIdx)
+        return {-1.0, -1.0};
+
+    return {leftIdx + 0.5, rightIdx + 0.5};
+}
+
+// ---------------------------------------------------------------------------
+// Z calibration wizard
+// ---------------------------------------------------------------------------
+
+void ScannerTab::onCalibrateZ()
+{
+    if (!m_camera || !m_camera->isOpen()) {
+        QMessageBox::warning(this, tr("Calibrate Z"), tr("Camera is not open."));
+        return;
+    }
+    if (!m_stage || !m_stage->isConnected()) {
+        QMessageBox::warning(this, tr("Calibrate Z"), tr("Stage is not connected."));
+        return;
+    }
+    if (m_scanning || m_calibMode != CalibMode::None) return;
+
+    // Ask for step size and number of steps
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("Z Calibration Setup"));
+    auto *form = new QFormLayout(&dlg);
+    auto *deltaSpin = new QDoubleSpinBox;
+    deltaSpin->setRange(0.1, 10.0);
+    deltaSpin->setDecimals(2);
+    deltaSpin->setValue(1.0);
+    deltaSpin->setSuffix(tr(" mm"));
+    auto *nSpin = new QSpinBox;
+    nSpin->setRange(2, 20);
+    nSpin->setValue(5);
+    form->addRow(tr("Step size (+Z per step):"), deltaSpin);
+    form->addRow(tr("Number of steps:"),         nSpin);
+    form->addRow(new QLabel(tr("Place a flat, diffuse surface in the laser plane.\n"
+                               "The stage will move upward by step × n steps.")));
+    auto *btnBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    connect(btnBox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(btnBox, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    form->addRow(btnBox);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    m_calibZDeltaMm     = deltaSpin->value();
+    m_calibZTotalSteps  = nSpin->value();
+    m_calibZCurrentStep = 0;
+    m_calibZStartZ      = m_stage->position().z;
+    m_calibZPoints.clear();
+
+    m_acqThread->stopAcquisition();
+    while (m_acqThread->isGrabbing())
+        QThread::msleep(5);
+    m_camera->setExposure(m_expSpin->value());
+
+    m_calibMode = CalibMode::CalibZ;
+    m_stageGroup->setDisabled(true);
+    m_startBtn->setDisabled(true);
+    emit scanActiveChanged(true);
+    m_statusLabel->setText(tr("Z-calib: capturing point 1/%1…").arg(m_calibZTotalSteps));
+
+    // Capture first frame at current Z (step 0)
+    auto maybe = m_camera->grabFrame(2000);
+    if (!maybe.has_value()) { finishCalibZ(false); return; }
+
+    const scanner::Frame frame0 = qImageToScannerFrame(maybe.value());
+    scanner::ExtractorParams ep;
+    ep.threshold = static_cast<uint16_t>(m_threshSpin->value());
+    const double row0 = meanValidRow(scanner::extractLaserProfile(frame0, ep));
+    if (row0 < 0.0) {
+        QMessageBox::warning(this, tr("Calibrate Z"), tr("No laser line found — check threshold."));
+        finishCalibZ(false);
+        return;
+    }
+    m_calibZPoints.push_back({m_calibZStartZ, row0});
+    m_calibZCurrentStep = 1;
+
+    if (m_calibZCurrentStep >= m_calibZTotalSteps) { finishCalibZ(true); return; }
+
+    m_statusLabel->setText(tr("Z-calib: moving to step 2/%1…").arg(m_calibZTotalSteps));
+    QMetaObject::invokeMethod(m_stage,
+        [s = m_stage, dz = m_calibZDeltaMm] { s->moveRelative(0.0, 0.0, dz); });
+}
+
+void ScannerTab::finishCalibZ(bool success)
+{
+    m_calibMode = CalibMode::None;
+    m_stageGroup->setEnabled(true);
+    m_startBtn->setEnabled(true);
+    m_acqThread->startAcquisition();
+    emit scanActiveChanged(false);
+
+    if (!success) {
+        m_statusLabel->setText(tr("Z calibration failed."));
+        return;
+    }
+
+    const auto calib = scanner::calibrateFromZPoints(
+        std::span<const scanner::ZCalibPoint>(m_calibZPoints.data(), m_calibZPoints.size()),
+        currentCalib());
+
+    if (calib.scale_z <= 0.0) {
+        QMessageBox::warning(this, tr("Calibrate Z"),
+            tr("Computed scale_z is not positive — make sure the stage moved in the +Z direction."));
+        m_statusLabel->setText(tr("Z calibration failed: invalid scale_z."));
+        return;
+    }
+
+    m_yRefSpin->setValue(calib.y_ref);
+    m_scaleZSpin->setValue(calib.scale_z);
+
+    // Return stage to starting Z
+    const double returnDz = -(m_calibZCurrentStep - 1) * m_calibZDeltaMm;
+    if (std::abs(returnDz) > 1e-6)
+        QMetaObject::invokeMethod(m_stage,
+            [s = m_stage, dz = returnDz] { s->moveRelative(0.0, 0.0, dz); });
+
+    m_statusLabel->setText(
+        tr("Z-calib done: y_ref = %1 px,  scale_z = %2 mm/px  (%3 points)")
+            .arg(calib.y_ref,   0, 'f', 1)
+            .arg(calib.scale_z, 0, 'f', 5)
+            .arg(m_calibZPoints.size()));
+}
+
+// ---------------------------------------------------------------------------
+// Y calibration wizard
+// ---------------------------------------------------------------------------
+
+void ScannerTab::onCalibrateY()
+{
+    if (!m_camera || !m_camera->isOpen()) {
+        QMessageBox::warning(this, tr("Calibrate Y"), tr("Camera is not open."));
+        return;
+    }
+    if (m_scanning || m_calibMode != CalibMode::None) return;
+
+    bool ok;
+    const double width = QInputDialog::getDouble(
+        this, tr("Y Calibration"),
+        tr("Exact width of the calibration object (mm):\n"
+           "(Place the object so both edges are visible in the laser line.)"),
+        10.0, 0.01, 9999.0, 3, &ok);
+    if (!ok) return;
+
+    m_acqThread->stopAcquisition();
+    while (m_acqThread->isGrabbing())
+        QThread::msleep(5);
+    m_camera->setExposure(m_expSpin->value());
+    auto maybe = m_camera->grabFrame(2000);
+    m_acqThread->startAcquisition();
+
+    if (!maybe.has_value()) {
+        QMessageBox::warning(this, tr("Calibrate Y"), tr("Failed to capture frame."));
+        return;
+    }
+
+    const scanner::Frame frame = qImageToScannerFrame(maybe.value());
+    scanner::ExtractorParams ep;
+    ep.threshold = static_cast<uint16_t>(m_threshSpin->value());
+    const auto profile = scanner::extractLaserProfile(frame, ep);
+
+    const auto [leftCol, rightCol] = detectEdges(profile);
+    if (leftCol < 0.0 || rightCol < 0.0) {
+        QMessageBox::warning(this, tr("Calibrate Y"),
+            tr("Could not detect two edges in the laser profile.\n"
+               "Make sure the object is in the laser plane and the threshold is correct."));
+        return;
+    }
+
+    const auto calib = scanner::calibrateFromYEdges(leftCol, rightCol, width, currentCalib());
+    m_scaleYSpin->setValue(calib.scale_y);
+    m_cxSpin->setValue(calib.cx);
+
+    m_statusLabel->setText(
+        tr("Y-calib done: scale_y = %1 mm/px,  cx = %2 px  (edges at col %3 / %4)")
+            .arg(calib.scale_y, 0, 'f', 5)
+            .arg(calib.cx,      0, 'f', 1)
+            .arg(leftCol,       0, 'f', 1)
+            .arg(rightCol,      0, 'f', 1));
 }
 
 scanner::CalibParams ScannerTab::currentCalib() const

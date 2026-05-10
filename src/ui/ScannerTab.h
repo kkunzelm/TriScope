@@ -3,6 +3,7 @@
 #include "scanner/processing/Triangulator.h"
 
 #include <QWidget>
+#include <utility>
 #include <vector>
 
 class ICameraDevice;
@@ -41,14 +42,21 @@ private slots:
     void onLoadCalib();
     void onSaveCalib();
     void onPositionChanged(double x, double y, double z);
+    void onCalibrateZ();
+    void onCalibrateY();
 
 private:
     void buildUI();
     void startScan();
     void abortScan();
     void finishScan();
+    void finishCalibZ(bool success);
 
     scanner::CalibParams currentCalib() const;
+
+    // Helpers for calibration
+    static double meanValidRow(const scanner::LaserProfile &profile);
+    static std::pair<double,double> detectEdges(const scanner::LaserProfile &profile);
 
     // ── UI ──────────────────────────────────────────────────────────────────
     QGroupBox      *m_stageGroup  = nullptr;
@@ -75,6 +83,15 @@ private:
     ICameraDevice     *m_camera    = nullptr;
     AcquisitionThread *m_acqThread = nullptr;
     IPositioningStage *m_stage     = nullptr;
+
+    // ── Calibration state ────────────────────────────────────────────────────
+    enum class CalibMode { None, CalibZ };
+    CalibMode m_calibMode          = CalibMode::None;
+    std::vector<scanner::ZCalibPoint> m_calibZPoints;
+    double    m_calibZDeltaMm      = 1.0;
+    int       m_calibZTotalSteps   = 5;
+    int       m_calibZCurrentStep  = 0;
+    double    m_calibZStartZ       = 0.0;
 
     // ── Scan state ───────────────────────────────────────────────────────────
     bool                m_scanning    = false;
