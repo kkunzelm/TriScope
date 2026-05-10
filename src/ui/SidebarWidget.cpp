@@ -237,6 +237,30 @@ void SidebarWidget::buildStageSection(QGroupBox *gb)
     jogGrid->addWidget(makeJog(tr("-Z"),  0, 0,-1), 2, 1);
     lay->addLayout(jogGrid);
 
+    // Absolute move
+    lay->addWidget(new QLabel(tr("Go to (mm):"), gb));
+    auto makeGoSpin = [&](const QString &label) {
+        auto *row = new QHBoxLayout;
+        row->addWidget(new QLabel(label, gb));
+        auto *sb = new QDoubleSpinBox(gb);
+        sb->setRange(-999.999, 999.999);
+        sb->setDecimals(3);
+        sb->setSingleStep(0.1);
+        sb->setSuffix(tr(" mm"));
+        row->addWidget(sb, 1);
+        lay->addLayout(row);
+        return sb;
+    };
+    m_gotoX = makeGoSpin(tr("X:"));
+    m_gotoY = makeGoSpin(tr("Y:"));
+    m_gotoZ = makeGoSpin(tr("Z:"));
+
+    auto *goBtn = new QPushButton(tr("Move to Position"), gb);
+    lay->addWidget(goBtn);
+    connect(goBtn, &QPushButton::clicked, this, [this] {
+        emit moveAbsoluteRequested(m_gotoX->value(), m_gotoY->value(), m_gotoZ->value());
+    });
+
     // Stage action buttons
     auto *calBtn    = new QPushButton(tr("Home (Calibrate)"), gb);
     auto *measBtn   = new QPushButton(tr("Measure Range"),    gb);

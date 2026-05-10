@@ -34,6 +34,7 @@ private slots:
     void onStageConnect(const QString &port, const QString &type);
     void onStageDisconnect();
     void onJog(double dx, double dy, double dz);
+    void onMoveAbsolute(double x, double y, double z);
     void onCalibrate();
     void onMeasureLength();
     void onAbort();

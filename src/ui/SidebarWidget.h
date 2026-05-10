@@ -100,6 +100,11 @@ private:
     QRadioButton    *m_unitUm        = nullptr;
     bool             m_showUm        = false;
 
+    // Absolute move spinboxes
+    QDoubleSpinBox  *m_gotoX         = nullptr;
+    QDoubleSpinBox  *m_gotoY         = nullptr;
+    QDoubleSpinBox  *m_gotoZ         = nullptr;
+
     // Table measurement (relative XY)
     QPushButton     *m_setOriginBtn  = nullptr;
     QLabel          *m_relLabelX     = nullptr;

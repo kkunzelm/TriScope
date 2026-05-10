@@ -89,6 +89,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onStageDisconnect);
     connect(m_sidebar, &SidebarWidget::jogRequested,
             this, &MainWindow::onJog);
+    connect(m_sidebar, &SidebarWidget::moveAbsoluteRequested,
+            this, &MainWindow::onMoveAbsolute);
     connect(m_sidebar, &SidebarWidget::calibrateRequested,
             this, &MainWindow::onCalibrate);
     connect(m_sidebar, &SidebarWidget::measureLengthRequested,
@@ -281,6 +283,14 @@ void MainWindow::onJog(double dx, double dy, double dz)
     if (m_stage)
         QMetaObject::invokeMethod(m_stage.get(), [s = m_stage.get(), dx, dy, dz] {
             s->moveRelative(dx, dy, dz);
+        });
+}
+
+void MainWindow::onMoveAbsolute(double x, double y, double z)
+{
+    if (m_stage)
+        QMetaObject::invokeMethod(m_stage.get(), [s = m_stage.get(), x, y, z] {
+            s->moveAbsolute(x, y, z);
         });
 }
 
