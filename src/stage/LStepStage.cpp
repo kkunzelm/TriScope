@@ -64,8 +64,9 @@ bool LStepStage::connect(const QString &portName)
     // Pseudo-terminals (socat) have no real RTS/CTS lines → use NoFlowControl
     const bool isPty = portName.startsWith(QStringLiteral("/tmp/")) ||
                        portName.startsWith(QStringLiteral("/dev/pts/"));
-    m_port->setFlowControl(isPty ? QSerialPort::NoFlowControl
-                                 : QSerialPort::HardwareControl);
+    m_hwFlowControl = !isPty;
+    m_port->setFlowControl(m_hwFlowControl ? QSerialPort::HardwareControl
+                                           : QSerialPort::NoFlowControl);
 
     if (!m_port->open(QIODevice::ReadWrite)) {
         emit errorOccurred(QStringLiteral("Cannot open %1: %2")
@@ -96,8 +97,10 @@ void LStepStage::disconnect()
     m_queue.clear();
     m_busy = false;
 
-    // Abort any in-flight motion before closing so the controller does not
-    // get stuck waiting for a UP acknowledgement that will never arrive.
+    // Abort any in-flight motion before closing — bypass CTS so the command
+    // reaches the controller even while motors are running.
+    if (m_hwFlowControl)
+        m_port->setFlowControl(QSerialPort::NoFlowControl);
     m_port->write(mcl3(0x07, "a"));
     m_port->waitForBytesWritten(500);
     m_rxBuf.clear();
@@ -155,13 +158,24 @@ void LStepStage::moveAbsolute(double swX, double swY, double swZ)
     const long hwY = mmToUnits(swToHwY(swY));
     const long hwZ = mmToUnits(swToHwZ(swZ));
 
+    // Use homing-proven Z parameters whenever Z is part of the move.
+    const bool movesZ = (std::abs(swZ - m_position.z) > 0.0001);
+    if (movesZ) {
+        enqueueWrite(mcl3(0x09, "100"));  // Speed = 100 (same as calibrate)
+        enqueueWrite(mcl3(0x08, "50"));   // Ramp  = 50  (gentle enough for EM brake)
+    }
+
     enqueueWrite(mcl3(0x00, QString::number(hwX)));  // Preselection X
     enqueueWrite(mcl3(0x01, QString::number(hwY)));  // Preselection Y
     enqueueWrite(mcl3(0x02, QString::number(hwZ)));  // Preselection Z
     enqueueWrite(mcl3(0x0B, "7"));                   // ActiveAxes = XYZ
 
     enqueueMove(mcl3(0x07, "r"),                     // Sub-command 'r' = MoveAbsolute
-        [this](const QByteArray &resp) {
+        [this, movesZ](const QByteArray &resp) {
+            if (movesZ) {
+                enqueueWrite(mcl3(0x09, "50"));   // Restore Speed
+                enqueueWrite(mcl3(0x08, "500"));  // Restore Ramp
+            }
             emit movementFinished(QString::fromLatin1(resp));
             enqueuePositionQuery();
         }, 30000);
@@ -257,11 +271,17 @@ void LStepStage::abort()
     m_cmdTimeout->stop();
     m_queue.clear();
     m_busy = false;
+    m_rxBuf.clear();
 
-    // Abort is sent immediately, bypassing the queue
-    const QByteArray abortCmd = mcl3(0x07, "a");
-    m_port->write(abortCmd);
+    // The controller deasserts CTS while motors are running, which would
+    // block a normal write. Temporarily disable flow control so the abort
+    // reaches the controller immediately.
+    if (m_hwFlowControl)
+        m_port->setFlowControl(QSerialPort::NoFlowControl);
+    m_port->write(mcl3(0x07, "a"));
     m_port->waitForBytesWritten(500);
+    if (m_hwFlowControl)
+        m_port->setFlowControl(QSerialPort::HardwareControl);
 }
 
 // ---------------------------------------------------------------------------

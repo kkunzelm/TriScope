@@ -106,5 +106,6 @@ private:
     StagePosition m_position{};
     StagePosition m_hwMax{165.8, 166.5, 104.6}; // MS4-WT02 travel range (mm)
 
-    bool m_connected = false;
+    bool m_connected      = false;
+    bool m_hwFlowControl  = false;
 };
