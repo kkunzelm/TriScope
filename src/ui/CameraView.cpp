@@ -156,8 +156,7 @@ void CameraView::drawGrid(QPainter &p) const
 void CameraView::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() != Qt::LeftButton) return;
-    if (m_overlay.state() == MeasurementOverlay::State::Idle ||
-        m_overlay.state() == MeasurementOverlay::State::Done) return;
+    if (m_overlay.state() == MeasurementOverlay::State::Idle) return;
 
     m_overlay.addPoint(widgetToImage(event->position()));
 }
