@@ -297,9 +297,9 @@ void ScannerTab::startScan()
     const double startX = m_startXSpin->value();
     const double endX   = m_endXSpin->value();
     const double step   = m_stepSpin->value();
-    if (endX <= startX) {
+    if (std::abs(endX - startX) < step * 0.5) {
         QMessageBox::warning(this, tr("Scanner"),
-            tr("End X must be greater than Start X."));
+            tr("Scan range is smaller than the step size."));
         return;
     }
     const QString outPath = m_outputLabel->text();
@@ -309,9 +309,14 @@ void ScannerTab::startScan()
         return;
     }
 
-    // Build X position list
+    // Build X position list — support both ascending (endX > startX) and
+    // descending (endX < startX, normal after calibrate where X decreases
+    // as the stage moves away from the null switch).
+    const double signedStep = (endX >= startX) ? step : -step;
     m_xPositions.clear();
-    for (double x = startX; x <= endX + 1e-9; x += step)
+    for (double x = startX;
+         (endX >= startX) ? (x <= endX + 1e-9) : (x >= endX - 1e-9);
+         x += signedStep)
         m_xPositions.push_back(x);
 
     m_cloud.clear();
@@ -528,6 +533,15 @@ void ScannerTab::onSaveCalib()
         QMessageBox::warning(this, tr("Scanner"), tr("Cannot write file."));
     else
         f.write(QJsonDocument(obj).toJson());
+}
+
+void ScannerTab::onFrameReady(const QImage &img)
+{
+    if (m_scanning || m_calibMode != CalibMode::None) return;
+    m_preview->setPixmap(
+        QPixmap::fromImage(img).scaled(m_preview->size(),
+                                       Qt::KeepAspectRatio,
+                                       Qt::FastTransformation));
 }
 
 void ScannerTab::onPositionChanged(double x, double y, double z)

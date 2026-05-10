@@ -437,6 +437,11 @@ void SidebarWidget::updatePosition(double x, double y, double z)
         m_relLabelX->setText(formatPosition(x - m_originX));
         m_relLabelY->setText(formatPosition(y - m_originY));
     }
+    // Keep goto spin boxes in sync with current position when not being edited,
+    // so the user only needs to change the axis they want to move.
+    if (!m_gotoX->hasFocus()) { const QSignalBlocker b(m_gotoX); m_gotoX->setValue(x); }
+    if (!m_gotoY->hasFocus()) { const QSignalBlocker b(m_gotoY); m_gotoY->setValue(y); }
+    if (!m_gotoZ->hasFocus()) { const QSignalBlocker b(m_gotoZ); m_gotoZ->setValue(z); }
 }
 
 void SidebarWidget::refreshPortList()

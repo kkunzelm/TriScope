@@ -29,6 +29,9 @@ public:
     void setCamera(ICameraDevice *camera, AcquisitionThread *acqThread);
     void setStage(IPositioningStage *stage);
 
+    // Live preview: called by MainWindow for every frame from AcquisitionThread.
+    void onFrameReady(const QImage &img);
+
 signals:
     // Emitted at scan start/end so MainWindow can disable the sidebar.
     void scanActiveChanged(bool active);

@@ -70,6 +70,9 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_acqThread, &AcquisitionThread::frameReady,
             m_cameraView, &CameraView::onFrameReady,
             Qt::QueuedConnection);
+    connect(m_acqThread, &AcquisitionThread::frameReady,
+            m_scannerTab, &ScannerTab::onFrameReady,
+            Qt::QueuedConnection);
     connect(m_acqThread, &AcquisitionThread::acquisitionError,
             this, &MainWindow::onAcquisitionError);
 
