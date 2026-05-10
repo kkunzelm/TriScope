@@ -1,0 +1,11 @@
+build/
+*.o
+*.a
+*.so
+.cmake/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.autosave
+.vscode/
+.qtc_clangd/
