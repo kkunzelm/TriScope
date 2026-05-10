@@ -72,7 +72,8 @@ signals:
 
 private:
     void buildCameraSection(QGroupBox *gb);
-    void buildStageSection(QGroupBox *gb);
+    void buildStageConnectSection(QGroupBox *gb);
+    void buildStageControlSection(QGroupBox *gb);
     void buildOverlaySection(QGroupBox *gb);
     void buildMeasureSection(QGroupBox *gb);
 

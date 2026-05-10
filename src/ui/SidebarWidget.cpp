@@ -15,29 +15,49 @@
 #include <QScrollArea>
 #include <QSerialPortInfo>
 #include <QFrame>
+#include <QTabWidget>
 
 SidebarWidget::SidebarWidget(QWidget *parent)
     : QWidget(parent)
 {
     auto *root = new QVBoxLayout(this);
-    root->setContentsMargins(4, 4, 4, 4);
-    root->setSpacing(6);
+    root->setContentsMargins(2, 2, 2, 2);
+    root->setSpacing(0);
 
-    auto *cameraGb = new QGroupBox(tr("Camera"), this);
-    auto *stageGb  = new QGroupBox(tr("Stage"),  this);
-    auto *overlayGb = new QGroupBox(tr("Overlays"), this);
-    auto *measureGb  = new QGroupBox(tr("Measurement"), this);
+    auto *tabs = new QTabWidget(this);
 
+    // ---- Connect tab: camera setup + stage connection/homing ----
+    auto *connectPage = new QWidget;
+    auto *connectLay  = new QVBoxLayout(connectPage);
+    connectLay->setContentsMargins(4, 4, 4, 4);
+    connectLay->setSpacing(6);
+    auto *cameraGb    = new QGroupBox(tr("Camera"), connectPage);
+    auto *stageConnGb = new QGroupBox(tr("Stage"),  connectPage);
     buildCameraSection(cameraGb);
-    buildStageSection(stageGb);
+    buildStageConnectSection(stageConnGb);
+    connectLay->addWidget(cameraGb);
+    connectLay->addWidget(stageConnGb);
+    connectLay->addStretch();
+    tabs->addTab(connectPage, tr("Connect"));
+
+    // ---- Evaluate tab: position / jog / measurement tools ----
+    auto *evalPage = new QWidget;
+    auto *evalLay  = new QVBoxLayout(evalPage);
+    evalLay->setContentsMargins(4, 4, 4, 4);
+    evalLay->setSpacing(6);
+    auto *stageCtrlGb = new QGroupBox(tr("Stage"),       evalPage);
+    auto *overlayGb   = new QGroupBox(tr("Overlays"),    evalPage);
+    auto *measureGb   = new QGroupBox(tr("Measurement"), evalPage);
+    buildStageControlSection(stageCtrlGb);
     buildOverlaySection(overlayGb);
     buildMeasureSection(measureGb);
+    evalLay->addWidget(stageCtrlGb);
+    evalLay->addWidget(overlayGb);
+    evalLay->addWidget(measureGb);
+    evalLay->addStretch();
+    tabs->addTab(evalPage, tr("Evaluate"));
 
-    root->addWidget(cameraGb);
-    root->addWidget(stageGb);
-    root->addWidget(overlayGb);
-    root->addWidget(measureGb);
-    root->addStretch();
+    root->addWidget(tabs);
 
     setMinimumWidth(300);
     setMaximumWidth(380);
@@ -143,14 +163,13 @@ void SidebarWidget::buildCameraSection(QGroupBox *gb)
 }
 
 // ---------------------------------------------------------------------------
-// Stage section
+// Stage — Connect tab portion (port, type, connect, home, measure range)
 // ---------------------------------------------------------------------------
 
-void SidebarWidget::buildStageSection(QGroupBox *gb)
+void SidebarWidget::buildStageConnectSection(QGroupBox *gb)
 {
     auto *lay = new QVBoxLayout(gb);
 
-    // Port + type selector
     auto *connRow = new QHBoxLayout;
     m_portCombo = new QComboBox(gb);
     m_stageTypeCombo = new QComboBox(gb);
@@ -165,7 +184,32 @@ void SidebarWidget::buildStageSection(QGroupBox *gb)
     m_connectBtn->setCheckable(true);
     lay->addWidget(m_connectBtn);
 
-    // Position display
+    auto *calBtn  = new QPushButton(tr("Home (Calibrate)"), gb);
+    auto *measBtn = new QPushButton(tr("Measure Range"),    gb);
+    lay->addWidget(calBtn);
+    lay->addWidget(measBtn);
+
+    connect(m_connectBtn, &QPushButton::toggled, this, [this](bool on) {
+        m_connectBtn->setText(on ? tr("Disconnect") : tr("Connect"));
+        if (on)
+            emit stageConnectRequested(m_portCombo->currentText(),
+                                       m_stageTypeCombo->currentData().toString());
+        else
+            emit stageDisconnectRequested();
+    });
+    connect(calBtn,  &QPushButton::clicked, this, &SidebarWidget::calibrateRequested);
+    connect(measBtn, &QPushButton::clicked, this, &SidebarWidget::measureLengthRequested);
+}
+
+// ---------------------------------------------------------------------------
+// Stage — Evaluate tab portion (position, jog, goto, abort)
+// ---------------------------------------------------------------------------
+
+void SidebarWidget::buildStageControlSection(QGroupBox *gb)
+{
+    auto *lay = new QVBoxLayout(gb);
+
+    // Unit toggle
     auto *unitRow = new QHBoxLayout;
     m_unitMm = new QRadioButton(tr("mm"), gb);
     m_unitUm = new QRadioButton(tr("µm"), gb);
@@ -175,6 +219,7 @@ void SidebarWidget::buildStageSection(QGroupBox *gb)
     unitRow->addStretch();
     lay->addLayout(unitRow);
 
+    // Absolute position display
     auto *posGrid = new QGridLayout;
     posGrid->addWidget(new QLabel(tr("X:"), gb), 0, 0);
     m_posLabelX = new QLabel(tr("—"), gb);
@@ -187,7 +232,7 @@ void SidebarWidget::buildStageSection(QGroupBox *gb)
     posGrid->addWidget(m_posLabelZ, 2, 1);
     lay->addLayout(posGrid);
 
-    // Table measurement: set origin and show relative XY displacement
+    // Table measurement: set origin, show relative XY
     m_setOriginBtn = new QPushButton(tr("Set Origin (Zero ΔX/ΔY)"), gb);
     lay->addWidget(m_setOriginBtn);
 
@@ -214,7 +259,7 @@ void SidebarWidget::buildStageSection(QGroupBox *gb)
     m_stepCombo = new QComboBox(gb);
     for (double s : {0.001, 0.01, 0.1, 1.0, 10.0, 50.0})
         m_stepCombo->addItem(QStringLiteral("%1 mm").arg(s), s);
-    m_stepCombo->setCurrentIndex(3); // 1 mm default
+    m_stepCombo->setCurrentIndex(3);
     stepRow->addWidget(m_stepCombo);
     lay->addLayout(stepRow);
 
@@ -224,8 +269,7 @@ void SidebarWidget::buildStageSection(QGroupBox *gb)
         auto *btn = new QPushButton(label, gb);
         btn->setFixedSize(44, 28);
         connect(btn, &QPushButton::clicked, this, [this, dx, dy, dz] {
-            const double s = jogStep();
-            emit jogRequested(dx * s, dy * s, dz * s);
+            emit jogRequested(dx * jogStep(), dy * jogStep(), dz * jogStep());
         });
         return btn;
     };
@@ -261,24 +305,10 @@ void SidebarWidget::buildStageSection(QGroupBox *gb)
         emit moveAbsoluteRequested(m_gotoX->value(), m_gotoY->value(), m_gotoZ->value());
     });
 
-    // Stage action buttons
-    auto *calBtn    = new QPushButton(tr("Home (Calibrate)"), gb);
-    auto *measBtn   = new QPushButton(tr("Measure Range"),    gb);
-    auto *abortBtn  = new QPushButton(tr("ABORT"),            gb);
+    // ABORT
+    auto *abortBtn = new QPushButton(tr("ABORT"), gb);
     abortBtn->setStyleSheet(QStringLiteral("background-color: #cc0000; color: white;"));
-    lay->addWidget(calBtn);
-    lay->addWidget(measBtn);
     lay->addWidget(abortBtn);
-
-    // Wiring
-    connect(m_connectBtn, &QPushButton::toggled, this, [this](bool on) {
-        m_connectBtn->setText(on ? tr("Disconnect") : tr("Connect"));
-        if (on)
-            emit stageConnectRequested(m_portCombo->currentText(),
-                                       m_stageTypeCombo->currentData().toString());
-        else
-            emit stageDisconnectRequested();
-    });
 
     auto *unitGroup = new QButtonGroup(gb);
     unitGroup->addButton(m_unitMm, 0);
@@ -287,9 +317,6 @@ void SidebarWidget::buildStageSection(QGroupBox *gb)
         m_showUm = (id == 1);
         emit unitToggled(m_showUm);
     });
-
-    connect(calBtn,   &QPushButton::clicked, this, &SidebarWidget::calibrateRequested);
-    connect(measBtn,  &QPushButton::clicked, this, &SidebarWidget::measureLengthRequested);
     connect(abortBtn, &QPushButton::clicked, this, &SidebarWidget::abortRequested);
 }
 
