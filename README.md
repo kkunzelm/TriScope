@@ -64,9 +64,11 @@ Start in the **Connect** tab to set up hardware. Switch to **Evaluate** for meas
 
 ### 2 — Connect the stage  *(Connect tab)*
 
-1. Select the serial port from the port dropdown (e.g. `/dev/ttyUSB0`).
+1. Select the serial port from the port dropdown (e.g. `/dev/ttyUSB0`). Click **↺** next to the dropdown if the port is not listed (the list is refreshed on demand).
 2. Select stage type: **LStep 23** or **DIY Stepper**.
 3. Click **Connect**. The stage sends its initialisation sequence automatically; the position display (in the Evaluate tab) updates to show the current hardware position.
+
+> **Shutdown:** click **Disconnect** before closing the application, or simply close the window — the application sends an abort command and closes the serial port cleanly either way. Hard-resetting the LStep23 after a crash should no longer be necessary.
 
 ### 3 — Home / Calibrate  *(Connect tab)*
 
@@ -125,6 +127,10 @@ The unit toggle (mm / µm) applies to both the absolute position display and the
 | Angle | Click 3 points | Angle at the middle point |
 | Radius | Click 3 points on an arc | Radius of the best-fit circle |
 | Clear | Button | Remove all annotations |
+
+The result is displayed as a text label anchored to the annotation in the video (white text with a dark shadow for legibility on any background). The completed measurement is also shown in the status bar.
+
+**Continuous measurement:** after the final point the annotation stays highlighted (thicker lines). The next click anywhere in the image clears the old result and starts a fresh measurement of the same type — the click becomes point 1. To stop measuring, click **Clear** or switch to a different tool.
 
 ---
 
