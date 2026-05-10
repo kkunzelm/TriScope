@@ -40,22 +40,35 @@ Run via the wrapper script (sets up library paths):
 
 ---
 
+## Sidebar layout
+
+The sidebar is split into two tabs:
+
+| Tab | Contents |
+|---|---|
+| **Connect** | Camera discovery/selection, exposure, gain, streaming — Stage port, type, Connect/Disconnect, Home (Calibrate), Measure Range |
+| **Evaluate** | Unit toggle (mm/µm), XYZ position display, ΔX/ΔY table measurement, Jog step + buttons, Go to Position, Abort — Crosshair/Grid overlays — Distance/Angle/Radius measurement tools |
+
+Start in the **Connect** tab to set up hardware. Switch to **Evaluate** for measurement work.
+
+---
+
 ## Quick-start workflow
 
-### 1 — Connect and start the camera
+### 1 — Connect and start the camera  *(Connect tab)*
 
-1. In the **Camera** section, click **↺** to discover available devices.
+1. Click **↺** to discover available devices.
 2. Select the camera from the dropdown (auto-selected after refresh).
 3. Click **Start Streaming**.
 4. Adjust **Exposure** and **Gain** sliders until the image is well-exposed.
 
-### 2 — Connect the stage
+### 2 — Connect the stage  *(Connect tab)*
 
 1. Select the serial port from the port dropdown (e.g. `/dev/ttyUSB0`).
 2. Select stage type: **LStep 23** or **DIY Stepper**.
-3. Click **Connect**. The stage sends its initialisation sequence automatically; the position display updates to show the current hardware position.
+3. Click **Connect**. The stage sends its initialisation sequence automatically; the position display (in the Evaluate tab) updates to show the current hardware position.
 
-### 3 — Home / Calibrate
+### 3 — Home / Calibrate  *(Connect tab)*
 
 Click **Home (Calibrate)**.
 
@@ -63,19 +76,23 @@ All three axes drive to their home switches (the zero reference). This takes app
 
 **Always calibrate after powering on the stage.** Without a calibration the displayed coordinates are meaningless.
 
-### 4 — Set travel range (Measure Range)
+### 4 — Set travel range (Measure Range)  *(Connect tab)*
 
 After homing, click **Measure Range**.
 
 All axes drive to their opposite end-switches (~20–30 s) to measure the full travel. The measured values are stored and used for coordinate display. Run this once per session, after Calibrate.
 
-### 5 — Jog the stage
+### 5 — Jog the stage  *(Evaluate tab)*
 
 Select a step size (0.001 mm – 50 mm) and click the ±X / ±Y / ±Z buttons.
 
 The Z axis uses reduced speed and a gentle ramp so that the electromagnetic holding brake has time to disengage before the motor accelerates. If Z does not move on the first click, try a slightly larger step.
 
-### 6 — Pixel / µm calibration (for image measurements)
+### 6 — Go to absolute position  *(Evaluate tab)*
+
+Enter target X, Y, Z coordinates in the **Go to Position** spinboxes and click **Move**. The stage drives to the entered coordinates in one move.
+
+### 7 — Pixel / µm calibration (for image measurements)  *(Evaluate tab)*
 
 Required before using Distance / Angle / Radius overlays in real-world units.
 
@@ -86,7 +103,7 @@ Required before using Distance / Angle / Radius overlays in real-world units.
 
 Alternatively, move the stage a known distance (e.g. 1.000 mm via a jog), mark the displacement of a feature in the image, and enter 1000 µm as the reference length.
 
-### 7 — Table measurement (XY distances via stage)
+### 8 — Table measurement (XY distances via stage)  *(Evaluate tab)*
 
 This mode measures distances using stage movement rather than image pixels, giving sub-micron repeatability.
 
