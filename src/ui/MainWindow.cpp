@@ -132,7 +132,7 @@ MainWindow::~MainWindow()
     disconnectStage();
 
     m_stageThread->quit();
-    m_stageThread->wait(2000);
+    m_stageThread->wait(5000);
 }
 
 // ---------------------------------------------------------------------------
@@ -270,12 +270,13 @@ void MainWindow::connectStageSignals(IPositioningStage *stage)
 
 void MainWindow::disconnectStage()
 {
-    if (m_stage) {
-        QMetaObject::invokeMethod(m_stage.get(), &IPositioningStage::disconnect);
-        // Give the stage thread a moment to process disconnect
-        QThread::msleep(100);
-        m_stage.reset();
-    }
+    if (!m_stage) return;
+    // BlockingQueuedConnection: main thread waits until disconnect() returns in
+    // the stage thread. If the stage thread is mid-command (waitForBytesWritten),
+    // we wait up to ~2.5 s for it to finish before the abort+close runs.
+    QMetaObject::invokeMethod(m_stage.get(), &IPositioningStage::disconnect,
+                              Qt::BlockingQueuedConnection);
+    m_stage.reset();
 }
 
 void MainWindow::onJog(double dx, double dy, double dz)

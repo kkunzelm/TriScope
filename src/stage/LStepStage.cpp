@@ -95,6 +95,13 @@ void LStepStage::disconnect()
     m_cmdTimeout->stop();
     m_queue.clear();
     m_busy = false;
+
+    // Abort any in-flight motion before closing so the controller does not
+    // get stuck waiting for a UP acknowledgement that will never arrive.
+    m_port->write(mcl3(0x07, "a"));
+    m_port->waitForBytesWritten(500);
+    m_rxBuf.clear();
+
     m_port->close();
     m_connected = false;
     emit disconnected();
