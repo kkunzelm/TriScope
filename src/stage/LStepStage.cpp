@@ -242,11 +242,18 @@ void LStepStage::measureLength()
 {
     if (!m_connected) return;
 
-    enqueueWrite(mcl3(0x0B, "7"));
+    // Z has an EM brake that requires the same slow-ramp parameters as calibrate.
+    // Without these, Speed=50/Ramp=500 is too aggressive for the brake to disengage
+    // and Z stalls, leaving the 'l' command waiting forever.
+    enqueueWrite(mcl3(0x09, "100"));  // Speed = 100 (same as calibrate)
+    enqueueWrite(mcl3(0x08, "50"));   // Ramp  = 50  (gentle enough for EM brake)
+    enqueueWrite(mcl3(0x0B, "7"));    // ActiveAxes = XYZ
     enqueueMove(mcl3(0x07, "l"),       // 'l' = MeasureLength (drive to end-switches)
         [this](const QByteArray &resp) {
-            // Read raw positions immediately after end-switches hit
-            // UC, UD, UE are read-address commands (register 67/68/69 = 0x43/0x44/0x45)
+            enqueueWrite(mcl3(0x09, "50"));   // Restore Speed
+            enqueueWrite(mcl3(0x08, "500"));  // Restore Ramp
+            // Read raw positions immediately after end-switches hit.
+            // UC, UD, UE are read-address commands (register 0x43/0x44/0x45).
             enqueueRead(QByteArray("\x55\x43\x0D", 3),
                 [this](const QByteArray &rx) {
                     m_hwMax.x = unitsToMm(rx.trimmed().toLong());
