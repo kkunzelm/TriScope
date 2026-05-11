@@ -49,7 +49,7 @@ cmake --build . -j$(nproc)
 Run via the generated wrapper script (sets `GENICAM_GENTL64_PATH` and library paths for IDS cameras):
 
 ```bash
-./VideoMeasuringMicroscope.sh
+./TriScope.sh
 ```
 
 Direct execution also works if IDS Peak runtime libraries are on `LD_LIBRARY_PATH`:
@@ -60,26 +60,26 @@ Direct execution also works if IDS Peak runtime libraries are on `LD_LIBRARY_PAT
 
 ---
 
-## Test ohne Hardware (Simulator)
+## Testing without hardware (Simulator)
 
-Für Entwicklung und Tests ohne angeschlossenen Messtisch steht ein Python-Simulator zur Verfügung, der die wichtigsten MCL3-Befehle beantwortet.
+For development and testing without a connected stage, a Python simulator is available that responds to the most important MCL3 commands.
 
-**Terminal 1 — virtuelles Port-Paar und Simulator starten:**
+**Terminal 1 — start virtual port pair and simulator:**
 
 ```bash
 ./tools/run-sim.sh
-# Gibt den GUI-Port aus, z. B.: GUI-Port: /tmp/lstep-app
+# Prints the GUI port, e.g.: GUI-Port: /tmp/lstep-app
 ```
 
-**Terminal 2 — Anwendung starten:**
+**Terminal 2 — start the application:**
 
 ```bash
 ./build/TriScope
 ```
 
-In der GUI **Aktualisieren** drücken. Der Port `/tmp/lstep-app` erscheint in der Dropdown-Liste (oder manuell eintragen). Anschließend **Verbinden** drücken.
+In the GUI click **Refresh**. The port `/tmp/lstep-app` appears in the dropdown list (or enter it manually). Then click **Connect**.
 
-Der Simulator beantwortet Positions-, Status-, Versions- und Bewegungsbefehle mit plausiblen Testwerten, reagiert aber nicht auf alle Spezialfälle (z. B. echte Endschalter-Ereignisse beim Tischhub-Messen).
+The simulator responds to position, status, version, and movement commands with plausible test values, but does not handle all edge cases (e.g. real end-switch events during travel range measurement).
 
 ---
 
