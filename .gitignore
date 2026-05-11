@@ -32,6 +32,11 @@ mocs_compilation.cpp
 # Project-specific excludes
 first-prompt.md
 todo.md
+history-heute.txt
+CLAUDE.md
+docs/Diplomarbeit*
+docs/info*
+
 
 # Claude Code
 .claude/

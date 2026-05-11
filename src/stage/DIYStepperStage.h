@@ -18,6 +18,7 @@ public:
     void moveRelative(double dx, double dy, double dz) override;
     void calibrate()  override;
     void setHome()    override;
+    bool isHomed()    const override { return false; }
     void abort()      override;
 
     StagePosition position()    const override;

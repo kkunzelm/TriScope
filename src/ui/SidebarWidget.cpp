@@ -181,8 +181,8 @@ void SidebarWidget::buildStageConnectSection(QGroupBox *gb)
     lay->addWidget(m_connectBtn);
 
     auto *calBtn     = new QPushButton(tr("Machine Home (Calibrate)"), gb);
-    auto *setHomeBtn = new QPushButton(tr("WCS Origin"),      gb);
-    auto *measBtn    = new QPushButton(tr("Measure Range"),    gb);
+    auto *setHomeBtn = new QPushButton(tr("Set WCS Origin"),      gb);
+    auto *measBtn    = new QPushButton(tr("Measure xyz-Stage Range"),    gb);
     setHomeBtn->setToolTip(tr("Declare the current physical position as software (0, 0, 0). "
                               "No movement — purely a coordinate reset. WCS = work coordinate system."));
     lay->addWidget(calBtn);

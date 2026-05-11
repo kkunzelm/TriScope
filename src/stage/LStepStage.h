@@ -32,6 +32,7 @@ public:
     void moveRelative(double dx, double dy, double dz) override;
     void calibrate()  override;
     void setHome()    override;
+    bool isHomed()    const override { return m_homed; }
     void abort()      override;
 
     StagePosition position()    const override;
@@ -112,5 +113,6 @@ private:
     StagePosition m_hwRange{165.8, 166.5, 104.6}; // physical travel range (mm), updated by measureLength()
 
     bool m_connected      = false;
+    bool m_homed          = false;
     bool m_hwFlowControl  = false;
 };

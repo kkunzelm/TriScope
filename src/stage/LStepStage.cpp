@@ -107,6 +107,7 @@ void LStepStage::disconnect()
 
     m_port->close();
     m_connected = false;
+    m_homed     = false;
     emit disconnected();
 }
 
@@ -258,6 +259,7 @@ void LStepStage::calibrate()
                             // hw(2,2,2) is now sw(0,0,0)
                             m_hwRef    = {2.0, 2.0, 2.0};
                             m_position = {0.0, 0.0, 0.0};
+                            m_homed    = true;
                             emit positionChanged(0.0, 0.0, 0.0);
                             emit movementFinished(QString::fromLatin1(resp));
                         }, 10000);
@@ -274,6 +276,7 @@ void LStepStage::setHome()
                    m_hwRef.y - m_position.y,
                    m_hwRef.z - m_position.z };
     m_position = {0.0, 0.0, 0.0};
+    m_homed    = true;
     emit positionChanged(0.0, 0.0, 0.0);
 }
 

@@ -39,6 +39,11 @@ public:
     // operation — no movement. Emits positionChanged(0,0,0) when done.
     virtual void setHome() = 0;
 
+    // Returns true if a WCS origin has been established (calibrate() completed
+    // or setHome() was called) since the last connect(). False on a freshly
+    // connected stage that has not been homed yet.
+    virtual bool isHomed() const = 0;
+
     // Emergency stop. Interrupts any active motion immediately.
     virtual void abort() = 0;
 

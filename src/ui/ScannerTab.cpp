@@ -231,6 +231,20 @@ void ScannerTab::buildUI()
         });
     });
 
+    auto *wcsBtn = new QPushButton(tr("Move to WCS Origin"), m_stageGroup);
+    stageLay->addWidget(wcsBtn);
+    connect(wcsBtn, &QPushButton::clicked, this, [this] {
+        if (!m_stage || m_scanning) return;
+        if (!m_stage->isHomed()) {
+            QMessageBox::information(this, tr("WCS Origin"),
+                tr("WCS origin not set. Use Connect → Calibrate or Set as Home first."));
+            return;
+        }
+        QMetaObject::invokeMethod(m_stage, [s = m_stage] {
+            s->moveAbsolute(0.0, 0.0, 0.0);
+        });
+    });
+
     auto *abortBtn = new QPushButton(tr("ABORT"), m_stageGroup);
     abortBtn->setStyleSheet(QStringLiteral("background-color: #cc0000; color: white;"));
     stageLay->addWidget(abortBtn);

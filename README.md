@@ -1,30 +1,42 @@
 # VideoMeasuringMicroscope
 
-Desktop application for a motorised video measuring microscope. Combines live camera acquisition with precision stage control to enable dimensional measurements directly from the camera image or via stage displacement.
-
-## Features
-
-- Live camera feed — IDS Peak (GenICam) and V4L2 (USB webcam) cameras
-- XYZ stage control — Lang LStep 23 (MCL3 protocol) and DIY stepper
-- Measurement overlays — distance, angle, radius with µm/pixel calibration
-- **Table measurement mode** — zero the stage position at a reference point and read the XY displacement to a second point with stage precision
-- Crosshair and 10×10 grid overlays
+Desktop application for a motorised video measuring microscope. Combines live camera acquisition with precision stage control to enable dimensional measurements directly from the camera image or via stage displacement. Includes a laser-line triangulation scanner that produces PLY point clouds.
 
 ---
 
-## Build
+## Features
 
-### Prerequisites
+- Live camera feed — IDS Peak (GenICam) and V4L2 (USB/webcam) cameras
+- XYZ stage control — Lang LStep 23 (MCL3 protocol) and DIY stepper stub
+- Measurement overlays — distance, angle, radius with µm/pixel calibration
+- Table measurement mode — read XY displacements between two points at stage precision
+- Crosshair and 10×10 grid overlays
+- Laser-line triangulation scanner — stop-and-go scan, Gaussian sub-pixel extraction, PLY export
+
+---
+
+## Prerequisites
 
 | Dependency | Minimum version | Notes |
 |---|---|---|
 | CMake | 3.20 | |
-| Qt | 6.4 | Widgets, SerialPort modules |
-| OpenCV | 4.x | imgproc, imgcodecs |
-| IDS Peak SDK | 2.x | Optional; only needed for IDS GenICam cameras |
-| Linux kernel | any recent | V4L2 support for USB webcams |
+| Qt | 6.4 | Core, Gui, Widgets, SerialPort |
+| OpenCV | 4.x | core, imgproc, imgcodecs |
+| Eigen3 | 3.3 | Header-only; used by the scanner triangulator |
+| IDS Peak SDK | 2.x | Only needed for IDS GenICam cameras; set `IDS_PEAK_ROOT` if installed outside `/opt/ids-peak` |
+| Linux kernel | any recent | V4L2 support for USB cameras |
 
-### Build steps
+Install on Debian/Ubuntu:
+
+```bash
+sudo apt install cmake qt6-base-dev qt6-serialport-dev libopencv-dev libeigen3-dev
+```
+
+IDS Peak SDK must be downloaded separately from IDS Imaging and installed to `/opt/ids-peak` (default) or another path passed via `-DIDS_PEAK_ROOT=…` at configure time.
+
+---
+
+## Build
 
 ```bash
 mkdir build && cd build
@@ -32,140 +44,160 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build . -j$(nproc)
 ```
 
-Run via the wrapper script (sets up library paths):
+Run via the generated wrapper script (sets `GENICAM_GENTL64_PATH` and library paths for IDS cameras):
 
 ```bash
 ./VideoMeasuringMicroscope.sh
 ```
 
+Direct execution also works if IDS Peak runtime libraries are on `LD_LIBRARY_PATH`:
+
+```bash
+./VideoMeasuringMicroscope
+```
+
 ---
 
-## Sidebar layout
+## Application layout
 
-The sidebar is split into two tabs:
+The window is split into a **left panel** (tabs, max 420 px wide) and a persistent **live camera view** on the right. The camera view is always visible regardless of which tab is active.
 
 | Tab | Contents |
 |---|---|
-| **Connect** | Camera discovery/selection, exposure, gain, streaming — Stage port, type, Connect/Disconnect, Home (Calibrate), Measure Range |
-| **Evaluate** | Unit toggle (mm/µm), XYZ position display, ΔX/ΔY table measurement, Jog step + buttons, Go to Position, Abort — Crosshair/Grid overlays — Distance/Angle/Radius measurement tools |
-
-Start in the **Connect** tab to set up hardware. Switch to **Evaluate** for measurement work.
+| **Connect** | Camera discovery, exposure/gain, streaming — Stage port/type, Connect/Disconnect, Home (Calibrate), Measure Range |
+| **Microscope** | Unit toggle, position display, ΔX/ΔY table measurement, jog controls, Go to Position, Abort — Crosshair/Grid — Distance/Angle/Radius overlay tools |
+| **Scanner** | Stage jog + Go to Position for scanner positioning — Scan parameters — Camera settings — Output file — Progress and Start/Abort |
+| **Calibrate** | Calibration parameters (y\_ref, scale\_z, scale\_y, cx) — Calibrate Z / Calibrate Y wizards — Save/Load JSON |
 
 ---
 
 ## Quick-start workflow
 
-### 1 — Connect and start the camera  *(Connect tab)*
+### 1 — Connect and start the camera *(Connect tab)*
 
 1. Click **↺** to discover available devices.
 2. Select the camera from the dropdown (auto-selected after refresh).
 3. Click **Start Streaming**.
-4. Adjust **Exposure** and **Gain** sliders until the image is well-exposed.
+4. Adjust **Exposure** and **Gain** until the image is well-exposed.
 
-### 2 — Connect the stage  *(Connect tab)*
+### 2 — Connect the stage *(Connect tab)*
 
-1. Select the serial port from the port dropdown (e.g. `/dev/ttyUSB0`). Click **↺** next to the dropdown if the port is not listed (the list is refreshed on demand).
+1. Select the serial port (e.g. `/dev/ttyUSB0`). Click **↺** to refresh the port list.
 2. Select stage type: **LStep 23** or **DIY Stepper**.
-3. Click **Connect**. The stage sends its initialisation sequence automatically; the position display (in the Evaluate tab) updates to show the current hardware position.
+3. Click **Connect**. The position display in the Microscope tab updates when the stage responds.
 
-> **Shutdown:** click **Disconnect** before closing the application, or simply close the window — the application sends an abort command and closes the serial port cleanly either way. Hard-resetting the LStep23 after a crash should no longer be necessary.
+> **Shutdown:** click **Disconnect** before closing, or close the window — the application sends an abort command and closes the serial port cleanly either way.
 
-### 3 — Home / Calibrate  *(Connect tab)*
+### 3 — Home / Calibrate *(Connect tab)*
 
 Click **Home (Calibrate)**.
 
-All three axes drive to their home switches (the zero reference). This takes approximately 10–15 s. After calibration the software origin (0, 0, 0) corresponds to the home-switch position.
+All three axes drive to their home switches. This takes approximately 10–15 s. After calibration the software origin (0, 0, 0) is at the home-switch position. **Always calibrate after powering on the stage** — without it the displayed coordinates are meaningless.
 
-**Always calibrate after powering on the stage.** Without a calibration the displayed coordinates are meaningless.
+### 4 — Set WCS origin *(Connect tab)*
 
-### 4 — Set travel range (Measure Range)  *(Connect tab)*
+After calibration the stage is at (0, 0, 0). If a different point should be the measurement origin, jog to that position and click **Set as Home**. This re-defines (0, 0, 0) to the current position without any movement.
 
-After homing, click **Measure Range**.
+### 5 — Measure travel range *(Connect tab)*
 
-All axes drive to their opposite end-switches (~20–30 s) to measure the full travel. The measured values are stored and used for coordinate display. Run this once per session, after Calibrate.
+Click **Measure Range** once per session (after Calibrate). The axes drive to their far end-switches (~20–30 s) to record the full travel. The Z axis is normally negative during use (stage below the objective).
 
-### 5 — Jog the stage  *(Evaluate tab)*
+### 6 — Jog the stage *(Microscope or Scanner tab)*
 
-Select a step size (0.001 mm – 50 mm) and click the ±X / ±Y / ±Z buttons.
+Select a step size (0.001 mm – 50 mm) and click the ±X / ±Y / ±Z buttons. The Z axis uses a reduced speed and gentle ramp so the electromagnetic brake has time to disengage.
 
-The Z axis uses reduced speed and a gentle ramp so that the electromagnetic holding brake has time to disengage before the motor accelerates. If Z does not move on the first click, try a slightly larger step.
+### 7 — Go to absolute position *(Microscope or Scanner tab)*
 
-### 6 — Go to absolute position  *(Evaluate tab)*
+Enter X, Y, Z coordinates in the **Go to (mm)** spinboxes and click **Move to Position**. The spinboxes track the live stage position until you edit them; after a **Move to Position** they resume tracking.
 
-Enter target X, Y, Z coordinates in the **Go to Position** spinboxes and click **Move**. The stage drives to the entered coordinates in one move.
+### 8 — Pixel / µm calibration *(Microscope tab)*
 
-### 7 — Pixel / µm calibration (for image measurements)  *(Evaluate tab)*
-
-Required before using Distance / Angle / Radius overlays in real-world units.
+Required before using the Distance / Angle / Radius overlay tools in real-world units.
 
 1. Place a reference object of known size in the field of view.
-2. Click **Distance** and mark the start and end of the known dimension on the image.
-3. Enter the known real-world length in the **µm** spinbox and the measured pixel count in the **px** spinbox.
-4. Click **Set**. All subsequent overlay measurements are shown in µm.
+2. Click **Distance** and mark the known dimension in the image.
+3. Enter the known length (µm) and measured pixels, then click **Set**.
 
-Alternatively, move the stage a known distance (e.g. 1.000 mm via a jog), mark the displacement of a feature in the image, and enter 1000 µm as the reference length.
+### 9 — Table measurement *(Microscope tab)*
 
-### 8 — Table measurement (XY distances via stage)  *(Evaluate tab)*
+Measures distances between two points using stage displacement rather than image pixels — sub-micron repeatability.
 
-This mode measures distances using stage movement rather than image pixels, giving sub-micron repeatability.
-
-1. Enable the **Crosshair** overlay (Overlays section) so the image centre is marked.
-2. Jog until the first point of interest is exactly at the crosshair centre.
-3. Click **Set Origin (Zero ΔX/ΔY)** — the ΔX and ΔY displays reset to 0.
-4. Jog until the second point of interest is at the crosshair centre.
-5. Read **ΔX** and **ΔY** — these are the true stage displacements and equal the distance between the two points in X and Y.
-
-The unit toggle (mm / µm) applies to both the absolute position display and the ΔX / ΔY display.
+1. Enable **Crosshair** (Overlays section).
+2. Jog until point A is at the crosshair centre.
+3. Click **Set Origin (Zero ΔX/ΔY)** — ΔX and ΔY reset to 0.
+4. Jog until point B is at the crosshair centre.
+5. Read **ΔX** / **ΔY** — true stage displacement between A and B.
 
 ---
 
-## Measurement overlay tools
+## Measurement overlay tools *(Microscope tab)*
 
-| Tool | Input | Output |
+| Tool | Clicks | Output |
 |---|---|---|
-| Distance | Click 2 points | Length between points |
-| Angle | Click 3 points | Angle at the middle point |
-| Radius | Click 3 points on an arc | Radius of the best-fit circle |
-| Clear | Button | Remove all annotations |
+| Distance | 2 | Length between points |
+| Angle | 3 | Angle at the middle point |
+| Radius | 3 (on arc) | Radius of the best-fit circle |
+| Clear | button | Remove all annotations |
 
-The result is displayed as a text label anchored to the annotation in the video (white text with a dark shadow for legibility on any background). The completed measurement is also shown in the status bar.
-
-**Continuous measurement:** after the final point the annotation stays highlighted (thicker lines). The next click anywhere in the image clears the old result and starts a fresh measurement of the same type — the click becomes point 1. To stop measuring, click **Clear** or switch to a different tool.
+The result is shown as a label in the image and in the status bar. The next click after a completed measurement starts a fresh measurement of the same type. Click **Clear** or switch tools to stop.
 
 ---
 
-## Scanner tab
+## Scanner *(Scanner tab + Calibrate tab)*
 
-The Scanner tab controls a laser-line triangulation scanner. A laser stripe is projected across the object; for each X position the camera captures a frame, the laser centroid is extracted per column, and a 3D point cloud is accumulated.
+The scanner projects a laser stripe across the object, moves the X stage in steps, captures one frame per step, extracts the laser centroid per camera column (sub-pixel Gaussian or centre-of-gravity), and writes a PLY point cloud.
 
-### Camera section
+### First-time setup
 
-| Field | Description |
-|---|---|
-| **Threshold** | Minimum pixel brightness (0–65535, 16-bit) that a column's peak must exceed to be counted as a laser return. Columns whose brightest pixel is at or below this value are skipped and produce no 3D point. Increase it to reject noise and ambient light; decrease it if valid laser returns on dim or angled surfaces are being lost. The default is 500. The Z-calibration wizard shows *"No laser line found — check threshold"* when every column falls below this value. |
-| **Exposure** | Camera exposure time (µs) used during scanning. Set independently of the live-view exposure so the laser line is well-exposed without saturating. |
+1. Open the camera and start streaming in the **Connect** tab.
+2. Connect and calibrate the stage.
+3. Switch to the **Scanner** tab.
+4. Set **Exposure** (µs) so the laser line is bright but not saturated.
+5. Click **Histogram…** to see the intensity distribution. Set **Threshold** just above the ambient-light floor so laser pixels pass and background pixels are rejected. The red line in the histogram shows the current threshold.
+6. **Max scatter** (px) — columns whose laser-line row position deviates more than this from the median across the frame are rejected as noise. 20 px is a good starting point for a relatively flat surface (≈ 1 mm height variation with default scale\_z).
+7. Calibrate the scanner geometry (see below).
+8. Set **Start X**, **End X** (use **← Pos** to capture the current stage position), and **Step**.
+9. Choose an output file with **Browse…**.
+10. Click **Start Scan**.
 
-### Scan Parameters section
+During the scan the camera view updates with each grabbed frame so you can verify the laser line is visible. Click **Abort** to stop early; partial data is discarded.
 
-| Field | Description |
-|---|---|
-| **Start X / End X** | Software X coordinates (mm) of the first and last scan position. Accepts negative values. Use the **← Pos** button to capture the current stage X position into the field. |
-| **Step** | Distance between consecutive X scan positions (mm). |
+### Stage controls during scanning
 
-### Calibration section
+The **Stage** section of the Scanner tab lets you jog and position the stage independently of the Microscope tab. **Move to WCS Origin** drives to (0, 0, 0) — only enabled after a successful Calibrate or Set as Home; it shows an informational message if the WCS origin has not been set.
 
-The scanner needs two calibration values before point cloud coordinates are meaningful:
+### Calibration *(Calibrate tab)*
 
-- **Z calibration** (`Calibrate Z…`) — moves the stage through a known Z range and fits the relationship between laser-row position in the image and physical Z height. Produces `y_ref` and `scale_z`.
-- **Y calibration** (`Calibrate Y…`) — uses an object of known width to fit `scale_y` and `cx` (the image column that corresponds to Y = 0).
+The scanner uses a double-telecentric triangulation model (Weber 1995):
 
-Calibration results can be saved and reloaded as JSON with **Save JSON / Load JSON**.
+```
+z_world = (y_ref − row_px)  × scale_z   [mm]
+y_world = (col_px − cx)     × scale_y   [mm]
+x_world = table_x                        [mm]
+```
 
----
+| Parameter | Meaning | Set by |
+|---|---|---|
+| `y_ref` (px) | Camera row where the laser appears at Z = 0 | Z calibration |
+| `scale_z` (mm/px) | Depth per pixel of laser-line row shift | Z calibration |
+| `scale_y` (mm/px) | Lateral mm per camera column | Y calibration |
+| `cx` (px) | Camera column that maps to world Y = 0 | Y calibration |
 
-## Longterm / planned
+**Z calibration (Calibrate Z…)**
 
-- **IDS camera hardware ROI** — expose a "Zoom In" control that uses the GenICam `Width`, `Height`, `OffsetX`, `OffsetY` nodes to crop the sensor region. This reduces USB bandwidth, increases frame rate on the selected region, and avoids software scaling artefacts.
+1. Place a flat, diffuse surface (white paper, ceramic tile) in the laser plane.
+2. Enter step size (e.g. 1 mm) and number of steps (e.g. 5). The stage moves downward (−Z) through the steps.
+3. The wizard fits `row = y_ref − z / scale_z` by least squares and updates `y_ref` and `scale_z`.
+
+**Y calibration (Calibrate Y…)**
+
+1. Place an object of exactly known width in the laser plane so both edges are visible.
+2. Enter the width in mm.
+3. The wizard detects the two edge columns and computes `scale_y` and `cx`.
+
+Calibration parameters persist only within the session. Use **Save JSON** to store them and **Load JSON** to restore them at the next session.
+
+> **Note:** Scanner calibration is currently untested in practice. Run a test scan on a flat reference surface and verify that Z values are consistent across the field before trusting measurements.
 
 ---
 
@@ -173,10 +205,10 @@ Calibration results can be saved and reloaded as JSON with **Save JSON / Load JS
 
 Right-handed system, ISO 841 / G-code convention:
 
-| Axis | Zero position | Positive direction |
+| Axis | Zero (after Calibrate) | Positive direction |
 |---|---|---|
-| X | Home switch (left) | → right |
-| Y | Home switch (front) | → back |
-| Z | Home switch (top) | ↑ up (objective direction) |
+| X | Home switch | → right |
+| Y | Home switch | → away from user |
+| Z | Home switch (top of travel) | ↑ up towards objective |
 
-After Calibrate + Measure Range the stage reports positions in mm. The Z axis is normally negative during use (stage below the objective).
+Working Z positions are negative (stage below the objective zero point).
