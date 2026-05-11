@@ -56,7 +56,12 @@ static std::optional<QImage> grabFreshFrame(ICameraDevice *camera, int timeoutMs
 static scanner::Frame qImageToScannerFrame(const QImage &img)
 {
     scanner::Frame frame;
-    QImage gray = img.convertToFormat(QImage::Format_Grayscale8);
+    // Camera is mounted so the laser line runs vertically (top→bottom = Y axis)
+    // and height (Z) displaces it horizontally (left↔right).  Rotate 90° CCW so
+    // the laser becomes horizontal: columns → Y, rows → Z.  The camera preview
+    // is not affected — only the scanner processing path uses this function.
+    QImage gray = img.convertToFormat(QImage::Format_Grayscale8)
+                     .transformed(QTransform().rotate(90));
     frame.width  = gray.width();
     frame.height = gray.height();
     frame.data.resize(static_cast<std::size_t>(gray.width() * gray.height()));
@@ -384,6 +389,7 @@ void ScannerTab::buildUI()
 
     // ── Calibrate panel ───────────────────────────────────────────────────
     m_calibStatusLabel = new QLabel(tr("Idle"));
+    m_calibStatusLabel->setWordWrap(true);
     m_calibratePanel = new QWidget;
     auto *calibPanelLayout = new QVBoxLayout(m_calibratePanel);
     calibPanelLayout->setContentsMargins(8, 8, 8, 8);
@@ -525,6 +531,8 @@ void ScannerTab::onStepReady(const QString &)
 
         auto maybe = grabFreshFrame(m_camera, 2000);
         if (!maybe.has_value()) { finishCalibZ(false); return; }
+
+        emit previewFrameReady(maybe.value());
 
         const scanner::Frame frame = qImageToScannerFrame(maybe.value());
         scanner::ExtractorParams ep;
@@ -805,22 +813,26 @@ std::pair<double,double> ScannerTab::detectEdges(const scanner::LaserProfile &pr
     double minGrad = 0.0, maxGrad = 0.0;
     int leftIdx = -1, rightIdx = -1;
 
-    for (int c = 0; c < sz - 1; ++c) {
+    // 5-column window: bridges gradual transitions (laser beam width) and
+    // small invalid gaps (geometric shadow at the object edge).
+    const int kWin = 5;
+    for (int c = 0; c + kWin < sz; ++c) {
         const double r0 = rows[static_cast<std::size_t>(c)];
-        const double r1 = rows[static_cast<std::size_t>(c + 1)];
+        const double r1 = rows[static_cast<std::size_t>(c + kWin)];
         if (r0 < 0.0 || r1 < 0.0) continue;
         const double g = r1 - r0;
-        if (g < minGrad) { minGrad = g; leftIdx  = c; }
-        if (g > maxGrad) { maxGrad = g; rightIdx = c; }
+        if (g < minGrad) { minGrad = g; leftIdx  = c + kWin / 2; }
+        if (g > maxGrad) { maxGrad = g; rightIdx = c + kWin / 2; }
     }
 
-    // Require at least a 5-pixel step to count as an edge
+    // Require at least a 5-pixel step across the window to count as an edge
     if (leftIdx < 0 || rightIdx < 0 || -minGrad < 5.0 || maxGrad < 5.0)
         return {-1.0, -1.0};
-    if (rightIdx <= leftIdx)
-        return {-1.0, -1.0};
 
-    return {leftIdx + 0.5, rightIdx + 0.5};
+    // Return lo < hi regardless of which gradient direction ended up on which side
+    const double lo = std::min(leftIdx, rightIdx) + 0.5;
+    const double hi = std::max(leftIdx, rightIdx) + 0.5;
+    return {lo, hi};
 }
 
 // ---------------------------------------------------------------------------
@@ -883,6 +895,8 @@ void ScannerTab::onCalibrateZ()
     auto maybe = grabFreshFrame(m_camera, 2000);
     if (!maybe.has_value()) { finishCalibZ(false); return; }
 
+    emit previewFrameReady(maybe.value());
+
     const scanner::Frame frame0 = qImageToScannerFrame(maybe.value());
     scanner::ExtractorParams ep;
     ep.threshold        = static_cast<uint8_t>(m_threshSpin->value());
@@ -943,7 +957,7 @@ void ScannerTab::finishCalibZ(bool success)
     m_scaleZSpin->setValue(calib.scale_z);
 
     m_calibStatusLabel->setText(
-        tr("Z-calib done: y_ref = %1 px,  scale_z = %2 mm/px  (%3 points)")
+        tr("Z-calib done (%3 points):\ny_ref = %1 px\nscale_z = %2 mm/px")
             .arg(calib.y_ref,   0, 'f', 1)
             .arg(calib.scale_z, 0, 'f', 5)
             .arg(m_calibZPoints.size()));
@@ -984,14 +998,38 @@ void ScannerTab::onCalibrateY()
     const scanner::Frame frame = qImageToScannerFrame(maybe.value());
     scanner::ExtractorParams ep;
     ep.threshold        = static_cast<uint8_t>(m_threshSpin->value());
-    ep.medianRejectRows = m_scatterSpin->value();
+    ep.medianRejectRows = 0.0;  // must be disabled: the object step IS the outlier we need
     const auto profile = scanner::extractLaserProfile(frame, ep);
 
     const auto [leftCol, rightCol] = detectEdges(profile);
     if (leftCol < 0.0 || rightCol < 0.0) {
+        // Compute diagnostics to help the user understand the failure
+        int    validCount   = 0;
+        double rowMin       = 1e9, rowMax = -1e9, maxAdjGrad = 0.0;
+        for (int c = 0; c < profile.frameWidth; ++c) {
+            const double r = profile.rowPositions[static_cast<std::size_t>(c)];
+            if (r >= 0.0) {
+                ++validCount;
+                if (r < rowMin) rowMin = r;
+                if (r > rowMax) rowMax = r;
+                if (c > 0) {
+                    const double prev = profile.rowPositions[static_cast<std::size_t>(c - 1)];
+                    if (prev >= 0.0)
+                        maxAdjGrad = std::max(maxAdjGrad, std::abs(r - prev));
+                }
+            }
+        }
         QMessageBox::warning(this, tr("Calibrate Y"),
-            tr("Could not detect two edges in the laser profile.\n"
-               "Make sure the object is in the laser plane and the threshold is correct."));
+            tr("Could not detect two edges.\n"
+               "Valid columns: %1 / %2\n"
+               "Row range: %3 – %4 px  (step = %5 px)\n"
+               "Max adjacent gradient: %6 px\n\n"
+               "Both edges must be visible with background above and below.")
+                .arg(validCount).arg(profile.frameWidth)
+                .arg(rowMin < 1e8 ? rowMin : 0.0, 0, 'f', 0)
+                .arg(rowMax > -1e8 ? rowMax : 0.0, 0, 'f', 0)
+                .arg(rowMax > -1e8 ? rowMax - rowMin : 0.0, 0, 'f', 0)
+                .arg(maxAdjGrad, 0, 'f', 1));
         return;
     }
 

@@ -50,7 +50,6 @@ MainWindow::MainWindow(QWidget *parent)
     connectScroll->setWidget(m_sidebar->connectPanel());
     connectScroll->setWidgetResizable(true);
     connectScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    connectScroll->setMaximumWidth(420);
 
     // ---- Tab 2: Microscope — jog/measure sidebar only (no camera here) ----
     auto *evalScroll = new QScrollArea;
@@ -67,13 +66,12 @@ MainWindow::MainWindow(QWidget *parent)
     calibScroll->setWidgetResizable(true);
     calibScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
-    // ---- Central tab widget (left panel, max 420 px) ----
+    // ---- Central tab widget (left panel) ----
     m_tabs = new QTabWidget;
     m_tabs->addTab(connectScroll,                tr("Connect"));
     m_tabs->addTab(evalScroll,                   tr("Microscope"));
     m_tabs->addTab(m_scannerTab->scannerPanel(), tr("Scanner"));
     m_tabs->addTab(calibScroll,                  tr("Calibrate"));
-    m_tabs->setMaximumWidth(420);
 
     // ---- Persistent central splitter: tabs on left, camera always on right ----
     auto *centralSplitter = new QSplitter(Qt::Horizontal, this);
