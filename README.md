@@ -1,4 +1,6 @@
-# VideoMeasuringMicroscope
+# TriScope
+
+TriScope — triangulation + scope (microscope): microscope live view, precision stage control, and laser triangulation scanner.
 
 Desktop application for a motorised video measuring microscope. Combines live camera acquisition with precision stage control to enable dimensional measurements directly from the camera image or via stage displacement. Includes a laser-line triangulation scanner that produces PLY point clouds.
 

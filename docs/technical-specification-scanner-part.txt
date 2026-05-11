@@ -1,0 +1,337 @@
+Here is the complete technical specification:
+
+  ---
+  Laser Scanner Module — Technical Specification for Integration
+
+  1. Overview and Scope
+
+  This describes only the scanner-specific logic that sits on top of existing camera and XYZ-stage abstractions. The
+  receiving application already has:
+  - A camera object that returns 16-bit monochrome frames (row-major, uint16_t[])
+  - An XYZ controller that can move to absolute positions in mm and reports done asynchronously
+  - These are accessed through interfaces similar to ICamera and IMotionControl described below
+
+  The scanner adds:
+  - Laser line extraction (subpixel)
+  - Triangulation (2D pixel → 3D world coordinate)
+  - Calibration (Z-axis scale, Y-axis scale, optical axis centre)
+  - Stop-and-go scan loop
+  - PLY export
+
+  ---
+  2. Required Interface Contracts
+
+  The new code interacts with existing hardware only through these two abstractions. The signatures must be respected
+  exactly.
+
+  ICamera (what the scanner calls)
+
+  struct Frame {
+      std::vector<uint16_t> data;  // row-major, 16-bit mono
+      int width{0};
+      int height{0};
+      bool valid() const { return !data.empty() && width > 0 && height > 0; }
+      uint16_t pixel(int col, int row) const { return data[row * width + col]; }
+  };
+
+  enum class AcquisitionMode { Continuous, SoftwareTrigger };
+
+  struct CameraParams {
+      double exposureUs{500.0};
+      double gainDb{0.0};
+      int    roiOffsetY{0};   // 0 = full frame
+      int    roiHeight{0};    // 0 = full frame
+      AcquisitionMode mode{AcquisitionMode::SoftwareTrigger};
+  };
+
+  // Methods the scanner calls:
+  bool   configure(const CameraParams&);
+  bool   startAcquisition();
+  Frame  captureFrame(int timeoutMs = 5000);  // returns invalid Frame on error/timeout
+  void   stopAcquisition();
+  int    sensorWidth()  const;
+  int    sensorHeight() const;
+
+  Important: captureFrame() is synchronous and blocks the calling thread until a frame arrives or timeout expires.
+  During a scan it is called from the scan worker thread, never from the GUI thread.
+
+  IMotionControl (what the scanner calls)
+
+  struct Position3D { double x{0.0}; double y{0.0}; double z{0.0}; };
+
+  // Coordinate convention: software / ISO 841
+  //   +X = scan direction (table moves object past laser)
+  //   +Y = lateral (across laser line width)
+  //   +Z = up (Z=0 at home/reference surface)
+
+  // Methods the scanner calls:
+  bool       moveAbsolute(Position3D target);   // blocks until motion complete
+  bool       moveRelativeX(double deltaXMm);
+  Position3D currentPosition() const;
+  Position3D travelRange()     const;           // populated after calibrate()
+
+  ---
+  3. Calibration Parameters
+
+  All scanner math uses one CalibParams struct. These 5 numbers fully describe the optics and are saved/loaded as
+  JSON.
+
+  struct CalibParams {
+      double theta_rad{0.349066}; // triangulation angle Θ (~20°) — informational only
+      double y_ref{512.0};        // camera row where laser line hits Z=0 reference plane
+      double scale_z{0.050};      // mm per pixel in depth direction (from Z calibration)
+      double scale_y{0.017};      // mm per pixel in lateral direction (from Y calibration)
+      double cx{640.0};           // camera column of optical axis (world Y = 0)
+  };
+
+  JSON representation (loaded at startup with --calib-file):
+  { "theta_rad": 0.349, "y_ref": 512.0, "scale_z": 0.050, "scale_y": 0.017, "cx": 640.0 }
+
+  ---
+  4. Laser Line Extraction
+  
+  Purpose: Given one camera frame, find the subpixel row position of the laser line centre in each camera column.
+
+  Input: Frame (16-bit mono) + ExtractorParams
+  Output: LaserProfile — one double rowPosition per column; -1.0 means no valid laser in that column
+
+  struct ExtractorParams {
+      uint16_t threshold{500};   // minimum pixel value; pixels below this are not laser
+      int      windowRows{0};    // CoG fallback only: restrict to ±N rows around peak; 0 = whole column
+      PeakMethod method{PeakMethod::Gaussian};
+  };
+
+  struct LaserProfile {
+      std::vector<double> rowPositions;  // length == frameWidth
+      int frameWidth{0};
+      int frameHeight{0};
+      int validColumns{0};
+  };
+
+  Algorithm (per column):
+
+  Step 1 — Find peak row:
+    scan all rows in this column, find the row with the maximum pixel value (peakVal, peakRow)
+    if peakVal ≤ threshold → rowPositions[col] = -1.0, skip to next column
+
+  Step 2a — Gaussian 3-point log-interpolation (default, Weber 1995):
+    requires peakRow > 0 and peakRow < height-1
+    i0 = pixel at (peakRow-1, col)
+    i1 = pixel at (peakRow,   col)
+    i2 = pixel at (peakRow+1, col)
+    if i0 > 0 and i2 > 0:
+      li0 = log(i0),  li1 = log(i1),  li2 = log(i2)
+      denom = li0 - 2*li1 + li2
+      if denom < -1e-10:
+        rowPositions[col] = peakRow + 0.5*(li0 - li2) / denom
+        continue to next column   ← this is the preferred result
+
+  Step 2b — Center-of-Gravity fallback (if Gaussian fails or is disabled):
+    rowMin = max(0, peakRow - windowRows)  [or 0 if windowRows==0]
+    rowMax = min(height, peakRow + windowRows + 1)  [or height if windowRows==0]
+    sumW = sumWY = 0
+    for row in [rowMin, rowMax):
+      v = pixel(col, row)
+      if v > threshold:
+        sumW  += v
+        sumWY += v * row
+    if sumW > 0:
+      rowPositions[col] = sumWY / sumW
+
+  The Gaussian method gives ~20× subpixel precision on well-formed laser peaks. CoG is the fallback.
+
+  ---
+  5. Triangulation Model
+
+  Geometry: Double-telecentric laser triangulation. The laser projects a line in the scene YZ-plane. The camera views
+  from triangulation angle Θ. The table moves the object along world X.
+
+  Forward projection (pixel → world):
+  z_world = (y_ref  - y_px)  * scale_z     [mm]
+  y_world = (x_px   - cx)    * scale_y     [mm]
+  x_world = table_x_mm
+
+  Where:
+  - y_px = subpixel row from laser line extractor (positive down)
+  - x_px = camera column index
+  - table_x_mm = current X position of the motion controller
+  
+  Implementation:
+  // For each valid column in the LaserProfile:
+  if (rowPositions[col] < 0.0) continue;
+  double z = (calib.y_ref - rowPositions[col]) * calib.scale_z;
+  double y = (col         - calib.cx)          * calib.scale_y;
+  // 3D point: (table_x_mm, y, z)
+  
+  One LaserProfile from a W-pixel-wide frame produces at most W 3D points per scan step.
+
+  ---
+  6. Calibration Procedures
+  
+  6.1 Z-axis calibration (scale_z and y_ref)
+
+  Procedure: Move the stage to 3 known Z positions while a flat reference surface lies under the laser. Capture a
+  frame at each position. Compute the mean laser row at each Z.
+
+  Data structure:
+  struct ZCalibPoint {
+      double zMm;      // Z position from controller (mm, software coords)
+      double rowMean;  // mean of all valid rowPositions in the LaserProfile
+  };
+  
+  Math (least-squares linear regression):
+  Model: row = a + b * z  where a = y_ref, b = -1 / scale_z
+
+  n = number of calibration points (minimum 2)
+  sum_z   = Σ zMm
+  sum_r   = Σ rowMean
+  sum_z2  = Σ zMm²
+  sum_zr  = Σ zMm * rowMean
+
+  denom = n * sum_z2 - sum_z²
+  b = (n * sum_zr - sum_z * sum_r) / denom
+  a = (sum_r - b * sum_z) / n
+
+  y_ref   = a
+  scale_z = -1.0 / b          ← note: negative because row increases as z decreases
+
+  Wizard motion sequence (as implemented):
+  1. Capture frame at current Z = Z_base → point 1
+  2. Move to Z_base − 2 mm → capture → point 2
+  3. Move to Z_base − 4 mm → capture → point 3
+  4. Return to Z_base 
+  5. Fit with the above formula
+  
+  6.2 Y-axis calibration (scale_y and cx)
+
+  Procedure: Place an object of known physical width across the laser line. Detect the two outermost columns where the
+   laser profile is valid (the edges of the object). One frame is sufficient.
+
+  Math:
+  deltaCols = rightCol - leftCol          (column distance between edges)
+  scale_y   = knownWidthMm / deltaCols   (mm per pixel)
+  cx        = (leftCol + rightCol) / 2   (optical axis column)
+
+  Edge detection:
+  Scan rowPositions[] left-to-right; first valid column is leftCol, last valid column is rightCol. Valid means
+  rowPositions[col] >= 0.0.
+
+  ---
+  7. Stop-and-Go Scan Loop
+  
+  This is the core scanning algorithm. It runs in a worker thread (not the GUI thread) to avoid blocking the UI.
+
+  Input:  startX, endX, stepMm, CalibParams, camera, motion controller
+  Output: accumulated PointCloud → written to PLY file
+
+  1. Configure camera (exposure, gain, ROI, Continuous mode)
+  2. Start camera acquisition
+  3. Move to startX (absolute)
+
+  4. Build position list:
+     xPositions = [startX, startX+step, startX+2*step, ..., endX]
+     (always scan in one direction to eliminate backlash)
+
+  5. For each xMm in xPositions:
+     a. moveAbsolute({xMm, startY, startZ})   ← blocks until motion done
+     b. frame = captureFrame(5000 ms)          ← blocks until frame arrives
+     c. if frame invalid: skip (or throw, depending on error policy)
+     d. profile  = extractLaserProfile(frame, {threshold})
+     e. stepCloud = projectTo3D(profile, xMm, calib)
+     f. cloud.append(stepCloud)
+     g. emit progress(stepIndex, totalSteps, xMm)
+
+  6. Stop camera acquisition
+  7. Write cloud to PLY
+  8. Emit done signal with point count
+
+  Threading in the existing application: The scan loop must not run on the GUI thread. Options:
+  - Run it in a QThread-managed worker: emit progress signals via Qt::QueuedConnection
+  - Or use QMetaObject::invokeMethod with Qt::QueuedConnection for each step's stage move (signal-driven stop-and-go,
+  as in the current GUI implementation)
+  
+  The signal-driven approach (used in ScanSetupWindow) avoids blocking any thread: the stage controller emits
+  scanStepReady(xMm) when motion completes, the GUI slot then captures the frame and calls the extractor and projector
+   synchronously. This keeps the motion thread free.
+
+  ---
+  8. PLY Export
+  
+  Standard PLY, property float x y z, 3 × float32 per vertex.
+
+  Header (ASCII regardless of format):
+    ply
+    format binary_little_endian 1.0   (or "ascii 1.0" for debug)
+    element vertex <N>
+    property float x
+    property float y
+    property float z
+    end_header
+
+  Body (binary_little_endian):
+    For each point: 12 bytes = [x:float32][y:float32][z:float32], little-endian
+
+  Coordinates are in mm. CloudCompare reads this format directly. No normals, no colours.
+
+  ---
+  9. Scanner Tab — UI Elements Required
+  
+  The tab needs these inputs/controls:
+
+  ┌───────────────────┬─────────────────────────────────────────┬────────────────────┐
+  │     Parameter     │                 Widget                  │   Typical range    │
+  ├───────────────────┼─────────────────────────────────────────┼────────────────────┤
+  │ Scan start X (mm) │ QDoubleSpinBox + "← current pos" button │ 0 – travel range   │
+  ├───────────────────┼─────────────────────────────────────────┼────────────────────┤
+  │ Scan end X (mm)   │ QDoubleSpinBox + "← current pos" button │ 0 – travel range   │
+  ├───────────────────┼─────────────────────────────────────────┼────────────────────┤
+  │ Step size (mm)    │ QDoubleSpinBox                          │ 0.001 – 10.0       │
+  ├───────────────────┼─────────────────────────────────────────┼────────────────────┤
+  │ Laser threshold   │ QSpinBox                                │ 0 – 65535 (16-bit) │
+  ├───────────────────┼─────────────────────────────────────────┼────────────────────┤
+  │ Exposure (µs)     │ QDoubleSpinBox                          │ 10 – 100 000       │
+  ├───────────────────┼─────────────────────────────────────────┼────────────────────┤
+  │ Output file       │ Path label + browse button              │ .ply               │
+  ├───────────────────┼─────────────────────────────────────────┼────────────────────┤
+  │ Progress          │ QProgressBar                            │ 0 – N steps        │
+  ├───────────────────┼─────────────────────────────────────────┼────────────────────┤
+  │ Start scan        │ QPushButton (disables during scan)      │ —                  │
+  └───────────────────┴─────────────────────────────────────────┴────────────────────┘
+
+  Display during scan: live preview of the last captured frame (update every step), current X position, point count.
+
+  ---
+  10. Dependencies (new, beyond what the existing app already uses)
+  
+  ┌─────────┬───────────────────────────────────────────┐
+  │ Library │                    Use                    │
+  ├─────────┼───────────────────────────────────────────┤
+  │ Eigen3  │ Eigen::Vector3d for 3D point accumulation │
+  ├─────────┼───────────────────────────────────────────┤
+  │ C++20   │ std::span, std::format, std::filesystem   │
+  └─────────┴───────────────────────────────────────────┘
+
+  No additional Qt modules beyond what a camera/stage GUI already uses.
+
+  ---
+  11. Files to Copy Verbatim
+
+  These four files have zero dependencies on the LStepController, V4L2Camera, or any Qt GUI and can be dropped
+  directly into the new project:
+
+  File: processing/LaserLineExtractor.h/.cpp
+  What it provides: extractLaserProfile()
+  ────────────────────────────────────────
+  File: processing/Triangulator.h/.cpp
+  What it provides: projectTo3D(), CalibParams, calibrateFromZPoints(), calibrateFromYEdges()
+  ────────────────────────────────────────
+  File: export/PlyWriter.h/.cpp
+  What it provides: PlyWriter::write()
+  ────────────────────────────────────────
+  File: interfaces/ICamera.h
+  What it provides: Frame, CameraParams structs (adapt to your camera's frame format if different)
+
+  The only adaptation needed: if your camera already delivers a uint16_t[] row-major buffer, wrap it in the Frame
+  struct. If it delivers 8-bit, left-shift by 8 to produce 16-bit values (pixel16 = pixel8 << 8) — the extractor
+  threshold is then in the same 16-bit scale.
+
