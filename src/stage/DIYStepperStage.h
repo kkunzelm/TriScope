@@ -17,6 +17,7 @@ public:
     void moveAbsolute(double x, double y, double z)    override;
     void moveRelative(double dx, double dy, double dz) override;
     void calibrate()  override;
+    void setHome()    override;
     void abort()      override;
 
     StagePosition position()    const override;

@@ -40,30 +40,48 @@ MainWindow::MainWindow(QWidget *parent)
     // ---- Discovery ----
     m_discovery = new CameraDiscovery(this);
 
-    // ---- Tab 1: sidebar | camera view ----
-    auto *splitter = new QSplitter(Qt::Horizontal);
-
-    m_sidebar = new SidebarWidget(this);
-    auto *scrollArea = new QScrollArea;
-    scrollArea->setWidget(m_sidebar);
-    scrollArea->setWidgetResizable(true);
-    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scrollArea->setMaximumWidth(400);
-    splitter->addWidget(scrollArea);
-
-    m_cameraView = new CameraView;
-    splitter->addWidget(m_cameraView);
-    splitter->setStretchFactor(0, 0);
-    splitter->setStretchFactor(1, 1);
-
-    // ---- Tab 2: scanner ----
+    // ---- Controllers (not directly visible) ----
+    m_sidebar    = new SidebarWidget(this);
     m_scannerTab = new ScannerTab(this);
+    m_cameraView = new CameraView;
 
-    // ---- Central tab widget ----
-    m_tabs = new QTabWidget(this);
-    m_tabs->addTab(splitter,      tr("Microscope"));
-    m_tabs->addTab(m_scannerTab,  tr("Scanner"));
-    setCentralWidget(m_tabs);
+    // ---- Tab 1: Connect — Camera + Stage setup ----
+    auto *connectScroll = new QScrollArea;
+    connectScroll->setWidget(m_sidebar->connectPanel());
+    connectScroll->setWidgetResizable(true);
+    connectScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    connectScroll->setMaximumWidth(420);
+
+    // ---- Tab 2: Microscope — jog/measure sidebar only (no camera here) ----
+    auto *evalScroll = new QScrollArea;
+    evalScroll->setWidget(m_sidebar->evaluatePanel());
+    evalScroll->setWidgetResizable(true);
+    evalScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    // ---- Tab 3: Scanner — stage jog + scan controls ----
+    // (m_scannerTab->scannerPanel() is a plain VBox of controls)
+
+    // ---- Tab 4: Calibrate — calibration wizards + parameters ----
+    auto *calibScroll = new QScrollArea;
+    calibScroll->setWidget(m_scannerTab->calibratePanel());
+    calibScroll->setWidgetResizable(true);
+    calibScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    // ---- Central tab widget (left panel, max 420 px) ----
+    m_tabs = new QTabWidget;
+    m_tabs->addTab(connectScroll,                tr("Connect"));
+    m_tabs->addTab(evalScroll,                   tr("Microscope"));
+    m_tabs->addTab(m_scannerTab->scannerPanel(), tr("Scanner"));
+    m_tabs->addTab(calibScroll,                  tr("Calibrate"));
+    m_tabs->setMaximumWidth(420);
+
+    // ---- Persistent central splitter: tabs on left, camera always on right ----
+    auto *centralSplitter = new QSplitter(Qt::Horizontal, this);
+    centralSplitter->addWidget(m_tabs);
+    centralSplitter->addWidget(m_cameraView);
+    centralSplitter->setStretchFactor(0, 0);
+    centralSplitter->setStretchFactor(1, 1);
+    setCentralWidget(centralSplitter);
 
     // ---- Acquisition thread ----
     m_acqThread = new AcquisitionThread(this);
@@ -105,6 +123,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onMoveAbsolute);
     connect(m_sidebar, &SidebarWidget::calibrateRequested,
             this, &MainWindow::onCalibrate);
+    connect(m_sidebar, &SidebarWidget::setHomeRequested,
+            this, &MainWindow::onSetHome);
     connect(m_sidebar, &SidebarWidget::measureLengthRequested,
             this, &MainWindow::onMeasureLength);
     connect(m_sidebar, &SidebarWidget::abortRequested,
@@ -124,9 +144,9 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_cameraView, &CameraView::measurementResult,
             this, [this](const QString &txt) { statusBar()->showMessage(txt, 5000); });
 
-    // Disable sidebar while a scan is running
+    // Disable Microscope jog panel while a scan is running
     connect(m_scannerTab, &ScannerTab::scanActiveChanged,
-            m_sidebar, &QWidget::setDisabled);
+            m_sidebar->evaluatePanel(), &QWidget::setDisabled);
 
     // Initial camera list
     onCameraRefresh();
@@ -318,6 +338,12 @@ void MainWindow::onCalibrate()
 {
     if (m_stage)
         QMetaObject::invokeMethod(m_stage.get(), &IPositioningStage::calibrate);
+}
+
+void MainWindow::onSetHome()
+{
+    if (m_stage)
+        QMetaObject::invokeMethod(m_stage.get(), &IPositioningStage::setHome);
 }
 
 void MainWindow::onMeasureLength()

@@ -21,34 +21,27 @@
 SidebarWidget::SidebarWidget(QWidget *parent)
     : QWidget(parent)
 {
-    auto *root = new QVBoxLayout(this);
-    root->setContentsMargins(2, 2, 2, 2);
-    root->setSpacing(0);
-
-    auto *tabs = new QTabWidget(this);
-
-    // ---- Connect tab: camera setup + stage connection/homing ----
-    auto *connectPage = new QWidget;
-    auto *connectLay  = new QVBoxLayout(connectPage);
+    // ---- Connect panel (Camera + Stage connect) ----
+    m_connectPanel = new QWidget;
+    auto *connectLay = new QVBoxLayout(m_connectPanel);
     connectLay->setContentsMargins(4, 4, 4, 4);
     connectLay->setSpacing(6);
-    auto *cameraGb    = new QGroupBox(tr("Camera"), connectPage);
-    auto *stageConnGb = new QGroupBox(tr("Stage"),  connectPage);
+    auto *cameraGb    = new QGroupBox(tr("Camera"), m_connectPanel);
+    auto *stageConnGb = new QGroupBox(tr("Stage"),  m_connectPanel);
     buildCameraSection(cameraGb);
     buildStageConnectSection(stageConnGb);
     connectLay->addWidget(cameraGb);
     connectLay->addWidget(stageConnGb);
     connectLay->addStretch();
-    tabs->addTab(connectPage, tr("Connect"));
 
-    // ---- Evaluate tab: position / jog / measurement tools ----
-    auto *evalPage = new QWidget;
-    auto *evalLay  = new QVBoxLayout(evalPage);
+    // ---- Evaluate panel (position / jog / measurement tools) ----
+    m_evaluatePanel = new QWidget;
+    auto *evalLay = new QVBoxLayout(m_evaluatePanel);
     evalLay->setContentsMargins(4, 4, 4, 4);
     evalLay->setSpacing(6);
-    auto *stageCtrlGb = new QGroupBox(tr("Stage"),       evalPage);
-    auto *overlayGb   = new QGroupBox(tr("Overlays"),    evalPage);
-    auto *measureGb   = new QGroupBox(tr("Measurement"), evalPage);
+    auto *stageCtrlGb = new QGroupBox(tr("Stage"),       m_evaluatePanel);
+    auto *overlayGb   = new QGroupBox(tr("Overlays"),    m_evaluatePanel);
+    auto *measureGb   = new QGroupBox(tr("Measurement"), m_evaluatePanel);
     buildStageControlSection(stageCtrlGb);
     buildOverlaySection(overlayGb);
     buildMeasureSection(measureGb);
@@ -56,12 +49,7 @@ SidebarWidget::SidebarWidget(QWidget *parent)
     evalLay->addWidget(overlayGb);
     evalLay->addWidget(measureGb);
     evalLay->addStretch();
-    tabs->addTab(evalPage, tr("Evaluate"));
 
-    root->addWidget(tabs);
-
-    setMinimumWidth(300);
-    setMaximumWidth(380);
     refreshPortList();
 }
 
@@ -130,11 +118,11 @@ void SidebarWidget::buildCameraSection(QGroupBox *gb)
     });
 
     connect(m_exposureSpin, &QDoubleSpinBox::valueChanged, this, [this](double v) {
-        // Sync slider (avoid feedback loops)
         const QSignalBlocker bl(m_exposureSlider);
-        m_exposureSlider->setValue(static_cast<int>(
-            (v - m_exposureSpin->minimum()) /
-            (m_exposureSpin->maximum() - m_exposureSpin->minimum()) * 1000));
+        const double range = m_exposureSpin->maximum() - m_exposureSpin->minimum();
+        if (range > 0.0)
+            m_exposureSlider->setValue(static_cast<int>(
+                (v - m_exposureSpin->minimum()) / range * 1000));
         emit exposureChanged(v);
     });
 
@@ -148,9 +136,10 @@ void SidebarWidget::buildCameraSection(QGroupBox *gb)
 
     connect(m_gainSpin, &QDoubleSpinBox::valueChanged, this, [this](double v) {
         const QSignalBlocker bl(m_gainSlider);
-        m_gainSlider->setValue(static_cast<int>(
-            (v - m_gainSpin->minimum()) /
-            (m_gainSpin->maximum() - m_gainSpin->minimum()) * 1000));
+        const double range = m_gainSpin->maximum() - m_gainSpin->minimum();
+        if (range > 0.0)
+            m_gainSlider->setValue(static_cast<int>(
+                (v - m_gainSpin->minimum()) / range * 1000));
         emit gainChanged(v);
     });
 
@@ -191,9 +180,13 @@ void SidebarWidget::buildStageConnectSection(QGroupBox *gb)
     m_connectBtn->setCheckable(true);
     lay->addWidget(m_connectBtn);
 
-    auto *calBtn  = new QPushButton(tr("Home (Calibrate)"), gb);
-    auto *measBtn = new QPushButton(tr("Measure Range"),    gb);
+    auto *calBtn     = new QPushButton(tr("Machine Home (Calibrate)"), gb);
+    auto *setHomeBtn = new QPushButton(tr("WCS Origin"),      gb);
+    auto *measBtn    = new QPushButton(tr("Measure Range"),    gb);
+    setHomeBtn->setToolTip(tr("Declare the current physical position as software (0, 0, 0). "
+                              "No movement — purely a coordinate reset. WCS = work coordinate system."));
     lay->addWidget(calBtn);
+    lay->addWidget(setHomeBtn);
     lay->addWidget(measBtn);
 
     connect(portRefreshBtn, &QPushButton::clicked, this, &SidebarWidget::refreshPortList);
@@ -206,8 +199,9 @@ void SidebarWidget::buildStageConnectSection(QGroupBox *gb)
         else
             emit stageDisconnectRequested();
     });
-    connect(calBtn,  &QPushButton::clicked, this, &SidebarWidget::calibrateRequested);
-    connect(measBtn, &QPushButton::clicked, this, &SidebarWidget::measureLengthRequested);
+    connect(calBtn,     &QPushButton::clicked, this, &SidebarWidget::calibrateRequested);
+    connect(setHomeBtn, &QPushButton::clicked, this, &SidebarWidget::setHomeRequested);
+    connect(measBtn,    &QPushButton::clicked, this, &SidebarWidget::measureLengthRequested);
 }
 
 // ---------------------------------------------------------------------------
@@ -430,15 +424,27 @@ void SidebarWidget::updateCameraControls(const CameraControls &ctrl,
 {
     {
         const QSignalBlocker bl1(m_exposureSpin), bl2(m_exposureSlider);
-        m_exposureSpin->setRange(ctrl.exposureMin, ctrl.exposureMax);
-        m_exposureSpin->setSingleStep(ctrl.exposureStep);
+        if (ctrl.exposureMax > ctrl.exposureMin) {
+            m_exposureSpin->setRange(ctrl.exposureMin, ctrl.exposureMax);
+            m_exposureSpin->setSingleStep(ctrl.exposureStep);
+        }
         m_exposureSpin->setValue(currentExposure);
+        const double expRange = m_exposureSpin->maximum() - m_exposureSpin->minimum();
+        if (expRange > 0.0)
+            m_exposureSlider->setValue(static_cast<int>(
+                (currentExposure - m_exposureSpin->minimum()) / expRange * 1000));
     }
     {
         const QSignalBlocker bl1(m_gainSpin), bl2(m_gainSlider);
-        m_gainSpin->setRange(ctrl.gainMin, ctrl.gainMax);
-        m_gainSpin->setSingleStep(ctrl.gainStep);
+        if (ctrl.gainMax > ctrl.gainMin) {
+            m_gainSpin->setRange(ctrl.gainMin, ctrl.gainMax);
+            m_gainSpin->setSingleStep(ctrl.gainStep);
+        }
         m_gainSpin->setValue(currentGain);
+        const double gainRange = m_gainSpin->maximum() - m_gainSpin->minimum();
+        if (gainRange > 0.0)
+            m_gainSlider->setValue(static_cast<int>(
+                (currentGain - m_gainSpin->minimum()) / gainRange * 1000));
     }
 }
 

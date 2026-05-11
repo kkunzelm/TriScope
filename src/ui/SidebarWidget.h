@@ -25,6 +25,10 @@ class SidebarWidget : public QWidget
 public:
     explicit SidebarWidget(QWidget *parent = nullptr);
 
+    // Panels for placement into the application's main tab widget.
+    QWidget* connectPanel()  const { return m_connectPanel; }
+    QWidget* evaluatePanel() const { return m_evaluatePanel; }
+
     // Populate the camera combo-box from discovery results.
     void setCameraList(const QList<CameraInfo> &cameras);
 
@@ -55,6 +59,7 @@ signals:
     void jogRequested(double dx, double dy, double dz);   // mm
     void moveAbsoluteRequested(double x, double y, double z);
     void calibrateRequested();
+    void setHomeRequested();
     void measureLengthRequested();
     void abortRequested();
 
@@ -120,4 +125,8 @@ private:
     // Measurement calibration
     QDoubleSpinBox  *m_calPixSpin    = nullptr;
     QDoubleSpinBox  *m_calUmSpin     = nullptr;
+
+    // Top-level panels (owned here, parented to main tabs by MainWindow)
+    QWidget         *m_connectPanel  = nullptr;
+    QWidget         *m_evaluatePanel = nullptr;
 };

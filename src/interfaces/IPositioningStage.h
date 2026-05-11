@@ -35,6 +35,10 @@ public:
     // Drive all axes to their home (zero) switches. Long operation – 60 s timeout.
     virtual void calibrate() = 0;
 
+    // Declare the current physical position as software (0,0,0). Pure software
+    // operation — no movement. Emits positionChanged(0,0,0) when done.
+    virtual void setHome() = 0;
+
     // Emergency stop. Interrupts any active motion immediately.
     virtual void abort() = 0;
 

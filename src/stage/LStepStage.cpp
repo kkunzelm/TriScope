@@ -265,6 +265,18 @@ void LStepStage::calibrate()
         }, 60000);
 }
 
+void LStepStage::setHome()
+{
+    if (!m_connected) return;
+    // Compute the current hardware position from the existing software→hardware
+    // transform, then set it as the new origin. No movement — purely software.
+    m_hwRef    = { m_hwRef.x - m_position.x,
+                   m_hwRef.y - m_position.y,
+                   m_hwRef.z - m_position.z };
+    m_position = {0.0, 0.0, 0.0};
+    emit positionChanged(0.0, 0.0, 0.0);
+}
+
 void LStepStage::measureLength()
 {
     if (!m_connected) return;

@@ -25,6 +25,10 @@ class ScannerTab : public QWidget
 public:
     explicit ScannerTab(QWidget *parent = nullptr);
 
+    // Panels for placement into the application's main tab widget.
+    QWidget* scannerPanel()  const { return m_scannerPanel; }
+    QWidget* calibratePanel() const { return m_calibratePanel; }
+
     // Called by MainWindow whenever the active camera or stage changes.
     void setCamera(ICameraDevice *camera, AcquisitionThread *acqThread);
     void setStage(IPositioningStage *stage);
@@ -47,6 +51,7 @@ private slots:
     void onPositionChanged(double x, double y, double z);
     void onCalibrateZ();
     void onCalibrateY();
+    void onShowHistogram();
 
 private:
     void buildUI();
@@ -67,6 +72,10 @@ private:
     QLabel         *m_posLabelY   = nullptr;
     QLabel         *m_posLabelZ   = nullptr;
     QComboBox      *m_jogStepCombo = nullptr;
+    QDoubleSpinBox *m_gotoX       = nullptr;
+    QDoubleSpinBox *m_gotoY       = nullptr;
+    QDoubleSpinBox *m_gotoZ       = nullptr;
+    bool            m_gotoEdited  = false;
     QDoubleSpinBox *m_startXSpin  = nullptr;
     QDoubleSpinBox *m_endXSpin    = nullptr;
     QDoubleSpinBox *m_stepSpin    = nullptr;
@@ -77,10 +86,15 @@ private:
     QDoubleSpinBox *m_scaleZSpin  = nullptr;
     QDoubleSpinBox *m_scaleYSpin  = nullptr;
     QDoubleSpinBox *m_cxSpin      = nullptr;
-    QProgressBar   *m_progress    = nullptr;
-    QLabel         *m_statusLabel = nullptr;
-    QPushButton    *m_startBtn    = nullptr;
-    QLabel         *m_preview     = nullptr;
+    QProgressBar   *m_progress          = nullptr;
+    QLabel         *m_statusLabel       = nullptr;   // scan status (Scanner tab)
+    QLabel         *m_calibStatusLabel  = nullptr;   // calib status (Calibrate tab)
+    QPushButton    *m_startBtn          = nullptr;
+    QLabel         *m_preview           = nullptr;
+
+    // Top-level panels (owned here, parented to main tabs by MainWindow)
+    QWidget        *m_scannerPanel      = nullptr;
+    QWidget        *m_calibratePanel    = nullptr;
 
     // ── Hardware (non-owning) ────────────────────────────────────────────────
     ICameraDevice     *m_camera    = nullptr;

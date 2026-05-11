@@ -38,6 +38,7 @@ private slots:
     void onJog(double dx, double dy, double dz);
     void onMoveAbsolute(double x, double y, double z);
     void onCalibrate();
+    void onSetHome();
     void onMeasureLength();
     void onAbort();
     void onPositionChanged(double x, double y, double z);

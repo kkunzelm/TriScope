@@ -30,10 +30,15 @@
 #include <QMetaObject>
 #include <QThread>
 #include <QPixmap>
+#include <QPainter>
+#include <QPainterPath>
 #include <QSizePolicy>
 
 #include <filesystem>
 #include <span>
+#include <array>
+#include <cmath>
+#include <algorithm>
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -53,6 +58,96 @@ static scanner::Frame qImageToScannerFrame(const QImage &img)
                 static_cast<uint16_t>(line[col]) << 8;
     }
     return frame;
+}
+
+// ---------------------------------------------------------------------------
+// Histogram helper
+// ---------------------------------------------------------------------------
+
+// threshVal is the raw 16-bit threshold value from the spinbox (0–65535).
+// Camera pixels are 8-bit shifted left by 8, so actual values are multiples
+// of 256 in the range 0–65280.  The 256 histogram bins map to that range.
+static QPixmap buildHistogramPixmap(const std::array<int,256> &hist, int threshVal)
+{
+    constexpr int    W      = 900, H = 480;
+    constexpr int    mL     = 64, mR = 24, mT = 24, mB = 54;
+    constexpr double kMax16 = 65280.0;   // 255 << 8
+    const int pW = W - mL - mR;
+    const int pH = H - mT - mB;
+
+    QPixmap pix(W, H);
+    pix.fill(Qt::white);
+    QPainter p(&pix);
+    p.setRenderHint(QPainter::Antialiasing, false);
+
+    // log scale max
+    int mx = 1;
+    for (int v : hist) if (v > mx) mx = v;
+    const double logMax = std::log10(static_cast<double>(mx) + 1.0);
+
+    // Step-function polygon — each of the 256 bins spans [b*256, (b+1)*256)
+    // in 16-bit space.  The polygon outline gives a clear histogram shape.
+    QPainterPath path;
+    path.moveTo(mL, mT + pH);
+    for (int b = 0; b < 256; ++b) {
+        const double lv = std::log10(static_cast<double>(hist[b]) + 1.0);
+        const int bh    = static_cast<int>(lv / logMax * pH);
+        const double x0 = mL + b       * static_cast<double>(pW) / 256.0;
+        const double x1 = mL + (b + 1) * static_cast<double>(pW) / 256.0;
+        path.lineTo(x0, mT + pH - bh);
+        path.lineTo(x1, mT + pH - bh);
+    }
+    path.lineTo(mL + pW, mT + pH);
+    path.closeSubpath();
+
+    p.setBrush(QColor(70, 110, 190, 180));
+    p.setPen(QPen(QColor(40, 70, 150), 1));
+    p.drawPath(path);
+
+    // Threshold line — positioned using the raw 16-bit value
+    if (threshVal >= 0) {
+        const int tx = mL + static_cast<int>(threshVal / kMax16 * pW);
+        p.setPen(QPen(Qt::red, 2));
+        p.drawLine(tx, mT, tx, mT + pH);
+        p.setPen(Qt::red);
+        p.setFont(QFont(QString{}, 9));
+        const QString lbl = QString("thresh=%1").arg(threshVal);
+        const int lblX = (threshVal < 51200) ? tx + 4 : tx - 95;
+        p.drawText(lblX, mT + 16, lbl);
+    }
+
+    // Axes box
+    p.setPen(QPen(Qt::black, 1));
+    p.drawRect(mL, mT, pW, pH);
+
+    // X ticks + labels in 16-bit space
+    p.setFont(QFont(QString{}, 9));
+    p.setPen(Qt::black);
+    for (int v : {0, 10000, 20000, 30000, 40000, 50000, 60000, 65280}) {
+        const int x = mL + static_cast<int>(v / kMax16 * pW);
+        p.drawLine(x, mT + pH, x, mT + pH + 4);
+        p.drawText(x - 22, mT + pH + 18, QString::number(v));
+    }
+    p.drawText(mL + pW / 2 - 60, H - 10, "Intensity (16-bit)");
+
+    // Y log-scale ticks
+    for (int exp = 0; exp <= static_cast<int>(logMax); ++exp) {
+        const int y = mT + pH - static_cast<int>(exp / logMax * pH);
+        p.setPen(QPen(Qt::black, 1));
+        p.drawLine(mL - 4, y, mL, y);
+        p.setFont(QFont(QString{}, 8));
+        p.drawText(4, y + 4, QString("1e%1").arg(exp));
+    }
+
+    // Y label (rotated)
+    p.save();
+    p.setFont(QFont(QString{}, 9));
+    p.translate(14, mT + pH / 2 + 35);
+    p.rotate(-90);
+    p.drawText(0, 0, "log(count)");
+    p.restore();
+
+    return pix;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +205,53 @@ void ScannerTab::buildUI()
     jogGrid->addWidget(makeJog(tr("-Z"),  0, 0,-1), 2, 1);
     stageLay->addLayout(jogGrid);
 
+    // Absolute move
+    stageLay->addWidget(new QLabel(tr("Go to (mm):"), m_stageGroup));
+    auto makeGoSpin = [&](const QString &lbl) {
+        auto *row = new QHBoxLayout;
+        row->addWidget(new QLabel(lbl, m_stageGroup));
+        auto *sb = new QDoubleSpinBox(m_stageGroup);
+        sb->setRange(-999.999, 999.999);
+        sb->setDecimals(3);
+        sb->setSingleStep(0.1);
+        sb->setSuffix(tr(" mm"));
+        row->addWidget(sb, 1);
+        stageLay->addLayout(row);
+        return sb;
+    };
+    m_gotoX = makeGoSpin(tr("X:"));
+    m_gotoY = makeGoSpin(tr("Y:"));
+    m_gotoZ = makeGoSpin(tr("Z:"));
+
+    connect(m_gotoX, &QDoubleSpinBox::valueChanged, this, [this](double) {
+        if (m_gotoX->hasFocus()) m_gotoEdited = true;
+    });
+    connect(m_gotoY, &QDoubleSpinBox::valueChanged, this, [this](double) {
+        if (m_gotoY->hasFocus()) m_gotoEdited = true;
+    });
+    connect(m_gotoZ, &QDoubleSpinBox::valueChanged, this, [this](double) {
+        if (m_gotoZ->hasFocus()) m_gotoEdited = true;
+    });
+
+    auto *goBtn = new QPushButton(tr("Move to Position"), m_stageGroup);
+    stageLay->addWidget(goBtn);
+    connect(goBtn, &QPushButton::clicked, this, [this] {
+        if (!m_stage || m_scanning) return;
+        m_gotoEdited = false;
+        const double x = m_gotoX->value(), y = m_gotoY->value(), z = m_gotoZ->value();
+        QMetaObject::invokeMethod(m_stage, [s = m_stage, x, y, z] {
+            s->moveAbsolute(x, y, z);
+        });
+    });
+
+    auto *abortBtn = new QPushButton(tr("ABORT"), m_stageGroup);
+    abortBtn->setStyleSheet(QStringLiteral("background-color: #cc0000; color: white;"));
+    stageLay->addWidget(abortBtn);
+    connect(abortBtn, &QPushButton::clicked, this, [this] {
+        if (m_stage)
+            QMetaObject::invokeMethod(m_stage, &IPositioningStage::abort);
+    });
+
     // ── Scan Parameters ─────────────────────────────────────────────────────
     auto *scanGroup = new QGroupBox(tr("Scan Parameters"), this);
     auto *scanForm  = new QGridLayout(scanGroup);
@@ -150,6 +292,10 @@ void ScannerTab::buildUI()
 
     camForm->addRow(tr("Threshold:"),  m_threshSpin);
     camForm->addRow(tr("Exposure:"),   m_expSpin);
+
+    auto *histBtn = new QPushButton(tr("Histogram…"));
+    camForm->addRow(histBtn);
+    connect(histBtn, &QPushButton::clicked, this, &ScannerTab::onShowHistogram);
 
     // ── Output file ─────────────────────────────────────────────────────────
     auto *outGroup  = new QGroupBox(tr("Output File"), this);
@@ -197,44 +343,44 @@ void ScannerTab::buildUI()
     calibBtnRow->addWidget(saveCalibBtn);
     calibLayout->addLayout(calibBtnRow);
 
-    // ── Progress / status ────────────────────────────────────────────────────
+    // ── Progress / status / start (Scanner panel) ────────────────────────────
     m_progress    = new QProgressBar;
     m_progress->setRange(0, 100);
     m_progress->setValue(0);
     m_statusLabel = new QLabel(tr("Idle"));
 
-    // ── Start / Abort button ─────────────────────────────────────────────────
     m_startBtn = new QPushButton(tr("Start Scan"));
     m_startBtn->setMinimumHeight(36);
     connect(m_startBtn, &QPushButton::clicked, this, &ScannerTab::onStartOrAbort);
 
-    // ── Left panel assembly ──────────────────────────────────────────────────
-    auto *leftPanel = new QWidget(this);
-    leftPanel->setFixedWidth(380);
-    auto *leftLayout = new QVBoxLayout(leftPanel);
-    leftLayout->setContentsMargins(8, 8, 8, 8);
-    leftLayout->addWidget(m_stageGroup);
-    leftLayout->addWidget(scanGroup);
-    leftLayout->addWidget(camGroup);
-    leftLayout->addWidget(outGroup);
-    leftLayout->addWidget(calibGroup);
-    leftLayout->addWidget(m_progress);
-    leftLayout->addWidget(m_statusLabel);
-    leftLayout->addWidget(m_startBtn);
-    leftLayout->addStretch();
+    // m_preview is not placed in any visible layout; it is kept so that
+    // onFrameReady / onStepReady can still update it without crashing.
+    // The persistent CameraView in MainWindow's splitter serves as the live
+    // preview for all tabs.
+    m_preview = new QLabel;
+    m_preview->hide();
 
-    // ── Live preview ─────────────────────────────────────────────────────────
-    m_preview = new QLabel(tr("No frame"));
-    m_preview->setAlignment(Qt::AlignCenter);
-    m_preview->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    m_preview->setMinimumSize(320, 240);
-    m_preview->setStyleSheet("QLabel { background: #111; color: #888; }");
+    // ── Scanner panel: control column only ───────────────────────────────────
+    m_scannerPanel = new QWidget;
+    auto *scannerLayout = new QVBoxLayout(m_scannerPanel);
+    scannerLayout->setContentsMargins(8, 8, 8, 8);
+    scannerLayout->addWidget(m_stageGroup);
+    scannerLayout->addWidget(scanGroup);
+    scannerLayout->addWidget(camGroup);
+    scannerLayout->addWidget(outGroup);
+    scannerLayout->addWidget(m_progress);
+    scannerLayout->addWidget(m_statusLabel);
+    scannerLayout->addWidget(m_startBtn);
+    scannerLayout->addStretch();
 
-    // ── Top-level layout ─────────────────────────────────────────────────────
-    auto *mainLayout = new QHBoxLayout(this);
-    mainLayout->setContentsMargins(0, 0, 0, 0);
-    mainLayout->addWidget(leftPanel);
-    mainLayout->addWidget(m_preview, 1);
+    // ── Calibrate panel ───────────────────────────────────────────────────
+    m_calibStatusLabel = new QLabel(tr("Idle"));
+    m_calibratePanel = new QWidget;
+    auto *calibPanelLayout = new QVBoxLayout(m_calibratePanel);
+    calibPanelLayout->setContentsMargins(8, 8, 8, 8);
+    calibPanelLayout->addWidget(calibGroup);
+    calibPanelLayout->addWidget(m_calibStatusLabel);
+    calibPanelLayout->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +510,7 @@ void ScannerTab::onStepReady(const QString &)
 {
     // ── Z calibration step ───────────────────────────────────────────────────
     if (m_calibMode == CalibMode::CalibZ) {
-        m_statusLabel->setText(
+        m_calibStatusLabel->setText(
             tr("Z-calib: capturing point %1/%2…")
                 .arg(m_calibZCurrentStep + 1).arg(m_calibZTotalSteps));
 
@@ -389,7 +535,7 @@ void ScannerTab::onStepReady(const QString &)
         if (m_calibZCurrentStep >= m_calibZTotalSteps) {
             finishCalibZ(true);
         } else {
-            m_statusLabel->setText(
+            m_calibStatusLabel->setText(
                 tr("Z-calib: moving to step %1/%2…")
                     .arg(m_calibZCurrentStep + 1).arg(m_calibZTotalSteps));
             QMetaObject::invokeMethod(m_stage,
@@ -542,6 +688,69 @@ void ScannerTab::onSaveCalib()
         f.write(QJsonDocument(obj).toJson());
 }
 
+void ScannerTab::onShowHistogram()
+{
+    if (!m_camera || !m_camera->isOpen()) {
+        QMessageBox::warning(this, tr("Histogram"), tr("Camera is not open."));
+        return;
+    }
+
+    // Factor out grab+compute so the Refresh button can reuse it.
+    auto grabHist = [this]() -> std::optional<std::pair<std::array<int,256>, int>> {
+        const bool was = m_acqThread && m_acqThread->isGrabbing();
+        if (was) {
+            m_acqThread->stopAcquisition();
+            while (m_acqThread->isGrabbing()) QThread::msleep(5);
+        }
+        auto maybe = m_camera->grabFrame(2000);
+        if (was) m_acqThread->startAcquisition();
+        if (!maybe.has_value()) return std::nullopt;
+
+        const QImage gray = maybe.value().convertToFormat(QImage::Format_Grayscale8);
+        std::array<int,256> hist{};
+        for (int row = 0; row < gray.height(); ++row) {
+            const uchar *line = gray.constScanLine(row);
+            for (int col = 0; col < gray.width(); ++col)
+                ++hist[static_cast<unsigned char>(line[col])];
+        }
+        return std::make_pair(hist, m_threshSpin->value());
+    };
+
+    const auto result = grabHist();
+    if (!result) {
+        QMessageBox::warning(this, tr("Histogram"), tr("Failed to capture frame."));
+        return;
+    }
+
+    auto *dlg = new QDialog(this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->setWindowTitle(tr("Intensity Histogram"));
+    auto *lay = new QVBoxLayout(dlg);
+
+    auto *imgLabel = new QLabel(dlg);
+    imgLabel->setPixmap(buildHistogramPixmap(result->first, result->second));
+    lay->addWidget(imgLabel);
+
+    auto *btnRow = new QHBoxLayout;
+    auto *refreshBtn = new QPushButton(tr("Refresh"), dlg);
+    auto *closeBtn   = new QPushButton(tr("Close"),   dlg);
+    btnRow->addWidget(refreshBtn);
+    btnRow->addStretch();
+    btnRow->addWidget(closeBtn);
+    lay->addLayout(btnRow);
+
+    connect(refreshBtn, &QPushButton::clicked, dlg, [grabHist, imgLabel, dlg] {
+        const auto r = grabHist();
+        if (!r) return;
+        imgLabel->setPixmap(buildHistogramPixmap(r->first, r->second));
+        dlg->adjustSize();
+    });
+    connect(closeBtn, &QPushButton::clicked, dlg, &QDialog::close);
+
+    dlg->adjustSize();
+    dlg->show();
+}
+
 void ScannerTab::onFrameReady(const QImage &img)
 {
     if (m_scanning || m_calibMode != CalibMode::None) return;
@@ -556,6 +765,13 @@ void ScannerTab::onPositionChanged(double x, double y, double z)
     m_posLabelX->setText(QStringLiteral("%1 mm").arg(x, 0, 'f', 3));
     m_posLabelY->setText(QStringLiteral("%1 mm").arg(y, 0, 'f', 3));
     m_posLabelZ->setText(QStringLiteral("%1 mm").arg(z, 0, 'f', 3));
+    if (!m_gotoEdited) {
+        if (!m_gotoX->hasFocus() && !m_gotoY->hasFocus() && !m_gotoZ->hasFocus()) {
+            { const QSignalBlocker b(m_gotoX); m_gotoX->setValue(x); }
+            { const QSignalBlocker b(m_gotoY); m_gotoY->setValue(y); }
+            { const QSignalBlocker b(m_gotoZ); m_gotoZ->setValue(z); }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -652,7 +868,7 @@ void ScannerTab::onCalibrateZ()
     m_stageGroup->setDisabled(true);
     m_startBtn->setDisabled(true);
     emit scanActiveChanged(true);
-    m_statusLabel->setText(tr("Z-calib: capturing point 1/%1…").arg(m_calibZTotalSteps));
+    m_calibStatusLabel->setText(tr("Z-calib: capturing point 1/%1…").arg(m_calibZTotalSteps));
 
     // Capture first frame at current Z (step 0)
     auto maybe = m_camera->grabFrame(2000);
@@ -672,7 +888,7 @@ void ScannerTab::onCalibrateZ()
 
     if (m_calibZCurrentStep >= m_calibZTotalSteps) { finishCalibZ(true); return; }
 
-    m_statusLabel->setText(tr("Z-calib: moving to step 2/%1…").arg(m_calibZTotalSteps));
+    m_calibStatusLabel->setText(tr("Z-calib: moving to step 2/%1…").arg(m_calibZTotalSteps));
     // Move downward (−Z) to stay well away from the null switch at swZ = 0.
     QMetaObject::invokeMethod(m_stage,
         [s = m_stage, dz = m_calibZDeltaMm] { s->moveRelative(0.0, 0.0, -dz); });
@@ -697,7 +913,7 @@ void ScannerTab::finishCalibZ(bool success)
     }
 
     if (!success) {
-        m_statusLabel->setText(tr("Z calibration failed."));
+        m_calibStatusLabel->setText(tr("Z calibration failed."));
         return;
     }
 
@@ -709,14 +925,14 @@ void ScannerTab::finishCalibZ(bool success)
         QMessageBox::warning(this, tr("Calibrate Z"),
             tr("Computed scale_z is not positive — check that the laser line shifts "
                "visibly as Z changes."));
-        m_statusLabel->setText(tr("Z calibration failed: invalid scale_z."));
+        m_calibStatusLabel->setText(tr("Z calibration failed: invalid scale_z."));
         return;
     }
 
     m_yRefSpin->setValue(calib.y_ref);
     m_scaleZSpin->setValue(calib.scale_z);
 
-    m_statusLabel->setText(
+    m_calibStatusLabel->setText(
         tr("Z-calib done: y_ref = %1 px,  scale_z = %2 mm/px  (%3 points)")
             .arg(calib.y_ref,   0, 'f', 1)
             .arg(calib.scale_z, 0, 'f', 5)
@@ -772,7 +988,7 @@ void ScannerTab::onCalibrateY()
     m_scaleYSpin->setValue(calib.scale_y);
     m_cxSpin->setValue(calib.cx);
 
-    m_statusLabel->setText(
+    m_calibStatusLabel->setText(
         tr("Y-calib done: scale_y = %1 mm/px,  cx = %2 px  (edges at col %3 / %4)")
             .arg(calib.scale_y, 0, 'f', 5)
             .arg(calib.cx,      0, 'f', 1)

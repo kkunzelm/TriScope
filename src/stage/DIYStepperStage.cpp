@@ -19,6 +19,8 @@ void DIYStepperStage::moveRelative(double, double, double)
     { emit errorOccurred(QStringLiteral("DIY stepper: not yet implemented")); }
 void DIYStepperStage::calibrate()
     { emit errorOccurred(QStringLiteral("DIY stepper: not yet implemented")); }
+void DIYStepperStage::setHome()
+    { emit errorOccurred(QStringLiteral("DIY stepper: not yet implemented")); }
 void DIYStepperStage::abort()
     { emit errorOccurred(QStringLiteral("DIY stepper: not yet implemented")); }
 
