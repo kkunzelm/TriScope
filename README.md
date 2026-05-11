@@ -55,8 +55,31 @@ Run via the generated wrapper script (sets `GENICAM_GENTL64_PATH` and library pa
 Direct execution also works if IDS Peak runtime libraries are on `LD_LIBRARY_PATH`:
 
 ```bash
-./VideoMeasuringMicroscope
+./TriScope
 ```
+
+---
+
+## Test ohne Hardware (Simulator)
+
+Für Entwicklung und Tests ohne angeschlossenen Messtisch steht ein Python-Simulator zur Verfügung, der die wichtigsten MCL3-Befehle beantwortet.
+
+**Terminal 1 — virtuelles Port-Paar und Simulator starten:**
+
+```bash
+./tools/run-sim.sh
+# Gibt den GUI-Port aus, z. B.: GUI-Port: /tmp/lstep-app
+```
+
+**Terminal 2 — Anwendung starten:**
+
+```bash
+./build/TriScope
+```
+
+In der GUI **Aktualisieren** drücken. Der Port `/tmp/lstep-app` erscheint in der Dropdown-Liste (oder manuell eintragen). Anschließend **Verbinden** drücken.
+
+Der Simulator beantwortet Positions-, Status-, Versions- und Bewegungsbefehle mit plausiblen Testwerten, reagiert aber nicht auf alle Spezialfälle (z. B. echte Endschalter-Ereignisse beim Tischhub-Messen).
 
 ---
 
