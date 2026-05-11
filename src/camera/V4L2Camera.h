@@ -60,4 +60,5 @@ private:
     };
     std::vector<Buffer> m_buffers;
     std::atomic<bool>   m_streaming{false};
+    int                 m_cropBottomRows = 0;
 };

@@ -134,6 +134,35 @@ The result is displayed as a text label anchored to the annotation in the video 
 
 ---
 
+## Scanner tab
+
+The Scanner tab controls a laser-line triangulation scanner. A laser stripe is projected across the object; for each X position the camera captures a frame, the laser centroid is extracted per column, and a 3D point cloud is accumulated.
+
+### Camera section
+
+| Field | Description |
+|---|---|
+| **Threshold** | Minimum pixel brightness (0–65535, 16-bit) that a column's peak must exceed to be counted as a laser return. Columns whose brightest pixel is at or below this value are skipped and produce no 3D point. Increase it to reject noise and ambient light; decrease it if valid laser returns on dim or angled surfaces are being lost. The default is 500. The Z-calibration wizard shows *"No laser line found — check threshold"* when every column falls below this value. |
+| **Exposure** | Camera exposure time (µs) used during scanning. Set independently of the live-view exposure so the laser line is well-exposed without saturating. |
+
+### Scan Parameters section
+
+| Field | Description |
+|---|---|
+| **Start X / End X** | Software X coordinates (mm) of the first and last scan position. Accepts negative values. Use the **← Pos** button to capture the current stage X position into the field. |
+| **Step** | Distance between consecutive X scan positions (mm). |
+
+### Calibration section
+
+The scanner needs two calibration values before point cloud coordinates are meaningful:
+
+- **Z calibration** (`Calibrate Z…`) — moves the stage through a known Z range and fits the relationship between laser-row position in the image and physical Z height. Produces `y_ref` and `scale_z`.
+- **Y calibration** (`Calibrate Y…`) — uses an object of known width to fit `scale_y` and `cx` (the image column that corresponds to Y = 0).
+
+Calibration results can be saved and reloaded as JSON with **Save JSON / Load JSON**.
+
+---
+
 ## Longterm / planned
 
 - **IDS camera hardware ROI** — expose a "Zoom In" control that uses the GenICam `Width`, `Height`, `OffsetX`, `OffsetY` nodes to crop the sensor region. This reduces USB bandwidth, increases frame rate on the selected region, and avoids software scaling artefacts.

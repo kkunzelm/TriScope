@@ -105,6 +105,7 @@ private:
     QDoubleSpinBox  *m_gotoX         = nullptr;
     QDoubleSpinBox  *m_gotoY         = nullptr;
     QDoubleSpinBox  *m_gotoZ         = nullptr;
+    bool             m_gotoEdited    = false;  // true while user has unsent edits
 
     // Table measurement (relative XY)
     QPushButton     *m_setOriginBtn  = nullptr;

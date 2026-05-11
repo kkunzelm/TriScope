@@ -154,27 +154,34 @@ void LStepStage::moveAbsolute(double swX, double swY, double swZ)
 {
     if (!m_connected) return;
 
-    const long hwX = mmToUnits(swToHwX(swX));
-    const long hwY = mmToUnits(swToHwY(swY));
-    const long hwZ = mmToUnits(swToHwZ(swZ));
+    // The MCL3 'r' (absolute-move) command reverses the X/Z preselect register
+    // mapping relative to 'v' (relative-move), producing an X↔Z swap.
+    // Implement absolute moves as a delta relative move using the confirmed-working 'v'.
+    const double dx = swX - m_position.x;
+    const double dy = swY - m_position.y;
+    const double dz = swZ - m_position.z;
 
-    // Use homing-proven Z parameters whenever Z is part of the move.
-    const bool movesZ = (std::abs(swZ - m_position.z) > 0.0001);
+    const long hwDx = mmToUnits(-dx);
+    const long hwDy = mmToUnits(-dy);
+    const long hwDz = mmToUnits(-dz);
+
+    // Apply Z-safe params whenever Z is part of the move.
+    const bool movesZ = (std::abs(dz) > 0.0001);
     if (movesZ) {
-        enqueueWrite(mcl3(0x09, "100"));  // Speed = 100 (same as calibrate)
-        enqueueWrite(mcl3(0x08, "50"));   // Ramp  = 50  (gentle enough for EM brake)
+        enqueueWrite(mcl3(0x09, "100"));
+        enqueueWrite(mcl3(0x08, "50"));
     }
 
-    enqueueWrite(mcl3(0x00, QString::number(hwX)));  // Preselection X
-    enqueueWrite(mcl3(0x01, QString::number(hwY)));  // Preselection Y
-    enqueueWrite(mcl3(0x02, QString::number(hwZ)));  // Preselection Z
-    enqueueWrite(mcl3(0x0B, "7"));                   // ActiveAxes = XYZ
+    enqueueWrite(mcl3(0x00, QString::number(hwDx)));
+    enqueueWrite(mcl3(0x01, QString::number(hwDy)));
+    enqueueWrite(mcl3(0x02, QString::number(hwDz)));
+    enqueueWrite(mcl3(0x0B, "7"));
 
-    enqueueMove(mcl3(0x07, "r"),                     // Sub-command 'r' = MoveAbsolute
+    enqueueMove(mcl3(0x07, "v"),
         [this, movesZ](const QByteArray &resp) {
             if (movesZ) {
-                enqueueWrite(mcl3(0x09, "50"));   // Restore Speed
-                enqueueWrite(mcl3(0x08, "500"));  // Restore Ramp
+                enqueueWrite(mcl3(0x09, "50"));
+                enqueueWrite(mcl3(0x08, "500"));
             }
             emit movementFinished(QString::fromLatin1(resp));
             enqueuePositionQuery();
@@ -229,25 +236,31 @@ void LStepStage::calibrate()
 
     enqueueMove(mcl3(0x07, "c"),       // 'c' = Calibrate (home)
         [this](const QByteArray &resp) {
-            // After homing, Z is parked on the null switch with the EM brake fully
-            // engaged.  Any subsequent caller using default Speed/Ramp (500) will
-            // stall Z because the ramp is too steep for the brake to release.
-            // Move Z 1 mm away from the switch (+1000 hardware units = +1 mm in the
-            // hardware-positive/stage-down direction) so the brake disengages and the
-            // controller is in the same state as after a power-cycle (stage mid-range).
-            enqueueWrite(mcl3(0x09, "20"));              // Speed = 20 (slow, brake-safe)
-            enqueueWrite(mcl3(0x08, "200"));             // Ramp  = 200 (gentle)
-            enqueueWrite(mcl3(0x0B, "4"));               // ActiveAxes = Z only
-            enqueueWrite(mcl3(0x02, QString::number(mmToUnits(1.0))));  // Z presel = +1 mm
-            enqueueMove(mcl3(0x07, "v"),                 // 'v' = MoveRelative
+            // All axes are at their null switches (hw 0,0,0).  Z has the EM brake
+            // fully engaged.  Must move Z alone first with brake-safe parameters;
+            // a simultaneous XYZ move does not give the brake time to release.
+            // Step 1: Z only — release brake and back off 2 mm.
+            enqueueWrite(mcl3(0x09, "20"));
+            enqueueWrite(mcl3(0x08, "200"));
+            enqueueWrite(mcl3(0x02, QString::number(mmToUnits(2.0))));
+            enqueueWrite(mcl3(0x0B, "4"));               // Z only
+            enqueueMove(mcl3(0x07, "v"),
                 [this, resp](const QByteArray &) {
-                    enqueueWrite(mcl3(0x09, "50"));      // Restore Speed
-                    enqueueWrite(mcl3(0x08, "500"));     // Restore Ramp
-                    enqueueWrite(mcl3(0x0B, "7"));       // Restore ActiveAxes = XYZ
-                    m_position = {0, 0, 0};
-                    emit positionChanged(0, 0, 0);
-                    emit movementFinished(QString::fromLatin1(resp));
-                    // Poll timer will update position display within 500 ms
+                    // Step 2: X and Y back off 2 mm (no brake, normal params).
+                    enqueueWrite(mcl3(0x09, "50"));
+                    enqueueWrite(mcl3(0x08, "500"));
+                    enqueueWrite(mcl3(0x00, QString::number(mmToUnits(2.0))));
+                    enqueueWrite(mcl3(0x01, QString::number(mmToUnits(2.0))));
+                    enqueueWrite(mcl3(0x0B, "3"));       // X+Y only
+                    enqueueMove(mcl3(0x07, "v"),
+                        [this, resp](const QByteArray &) {
+                            enqueueWrite(mcl3(0x0B, "7")); // restore ActiveAxes
+                            // hw(2,2,2) is now sw(0,0,0)
+                            m_hwRef    = {2.0, 2.0, 2.0};
+                            m_position = {0.0, 0.0, 0.0};
+                            emit positionChanged(0.0, 0.0, 0.0);
+                            emit movementFinished(QString::fromLatin1(resp));
+                        }, 10000);
                 }, 10000);
         }, 60000);
 }
@@ -270,13 +283,13 @@ void LStepStage::measureLength()
             // UC, UD, UE are read-address commands (register 0x43/0x44/0x45).
             enqueueRead(QByteArray("\x55\x43\x0D", 3),
                 [this](const QByteArray &rx) {
-                    m_hwMax.x = unitsToMm(rx.trimmed().toLong());
+                    m_hwRange.x = unitsToMm(rx.trimmed().toLong());
                     enqueueRead(QByteArray("\x55\x44\x0D", 3),
                         [this](const QByteArray &ry) {
-                            m_hwMax.y = unitsToMm(ry.trimmed().toLong());
+                            m_hwRange.y = unitsToMm(ry.trimmed().toLong());
                             enqueueRead(QByteArray("\x55\x45\x0D", 3),
                                 [this](const QByteArray &rz) {
-                                    m_hwMax.z = unitsToMm(rz.trimmed().toLong());
+                                    m_hwRange.z = unitsToMm(rz.trimmed().toLong());
                                     enqueuePositionQuery();
                                 });
                         });
@@ -460,4 +473,4 @@ void LStepStage::onPollTimer()
 // ---------------------------------------------------------------------------
 
 StagePosition LStepStage::position()    const { return m_position; }
-StagePosition LStepStage::travelRange() const { return m_hwMax;    }
+StagePosition LStepStage::travelRange() const { return m_hwRange; }

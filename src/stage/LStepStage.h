@@ -79,12 +79,12 @@ private:
     void enqueuePositionQuery();
 
     // ---- Coordinate helpers ----
-    double hwToSwX(double hw) const { return m_hwMax.x - hw; }
-    double hwToSwY(double hw) const { return m_hwMax.y - hw; }
-    double hwToSwZ(double hw) const { return -hw; }
-    double swToHwX(double sw) const { return m_hwMax.x - sw; }
-    double swToHwY(double sw) const { return m_hwMax.y - sw; }
-    double swToHwZ(double sw) const { return -sw; }
+    double hwToSwX(double hw) const { return m_hwRef.x - hw; }
+    double hwToSwY(double hw) const { return m_hwRef.y - hw; }
+    double hwToSwZ(double hw) const { return m_hwRef.z - hw; }
+    double swToHwX(double sw) const { return m_hwRef.x - sw; }
+    double swToHwY(double sw) const { return m_hwRef.y - sw; }
+    double swToHwZ(double sw) const { return m_hwRef.z - sw; }
 
     static long   mmToUnits(double mm)  { return static_cast<long>(std::llround(mm * 1000.0)); }
     static double unitsToMm(long units) { return units / 1000.0; }
@@ -104,7 +104,11 @@ private:
     QByteArray  m_rxBuf;
 
     StagePosition m_position{};
-    StagePosition m_hwMax{165.8, 166.5, 104.6}; // MS4-WT02 travel range (mm)
+    // Hardware position that maps to software (0,0,0). Set by calibrate() or setHome().
+    // Initial values match the pre-calibration default so behaviour is unchanged
+    // before the first calibrate() call: X/Y mirror via hwRef, Z uses hwRef.z=0 → swZ=-hwZ.
+    StagePosition m_hwRef{165.8, 166.5, 0.0};
+    StagePosition m_hwRange{165.8, 166.5, 104.6}; // physical travel range (mm), updated by measureLength()
 
     bool m_connected      = false;
     bool m_hwFlowControl  = false;

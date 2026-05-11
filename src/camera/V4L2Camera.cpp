@@ -60,6 +60,9 @@ bool V4L2Camera::open()
     m_info.displayName = QStringLiteral("%1 (%2)")
         .arg(QString::fromLatin1(reinterpret_cast<const char*>(cap.card)), m_devicePath);
 
+    if (m_info.displayName.contains(QStringLiteral("Grabby"), Qt::CaseInsensitive))
+        m_cropBottomRows = 20;
+
     // Select best format and set it
     m_pixelFormat = negotiateFormat();
     if (m_pixelFormat == 0) {
@@ -529,6 +532,8 @@ std::optional<QImage> V4L2Camera::grabFrame(int timeoutMs)
     ::ioctl(m_fd, VIDIOC_QBUF, &buf);
 
     if (img.isNull()) return std::nullopt;
+    if (m_cropBottomRows > 0 && img.height() > m_cropBottomRows)
+        img = img.copy(0, 0, img.width(), img.height() - m_cropBottomRows);
     return img;
 #endif
 }

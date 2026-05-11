@@ -114,8 +114,8 @@ void ScannerTab::buildUI()
     auto *scanGroup = new QGroupBox(tr("Scan Parameters"), this);
     auto *scanForm  = new QGridLayout(scanGroup);
 
-    m_startXSpin = new QDoubleSpinBox; m_startXSpin->setRange(0, 300); m_startXSpin->setDecimals(3); m_startXSpin->setSuffix(" mm");
-    m_endXSpin   = new QDoubleSpinBox; m_endXSpin->setRange(0, 300);   m_endXSpin->setDecimals(3);   m_endXSpin->setSuffix(" mm"); m_endXSpin->setValue(10.0);
+    m_startXSpin = new QDoubleSpinBox; m_startXSpin->setRange(-300, 300); m_startXSpin->setDecimals(3); m_startXSpin->setSuffix(" mm");
+    m_endXSpin   = new QDoubleSpinBox; m_endXSpin->setRange(-300, 300);   m_endXSpin->setDecimals(3);   m_endXSpin->setSuffix(" mm"); m_endXSpin->setValue(10.0);
     m_stepSpin   = new QDoubleSpinBox; m_stepSpin->setRange(0.001, 10); m_stepSpin->setDecimals(3); m_stepSpin->setSuffix(" mm"); m_stepSpin->setValue(0.1);
 
     auto *setStartBtn = new QPushButton(tr("← Pos"));
@@ -381,7 +381,8 @@ void ScannerTab::onStepReady(const QString &)
             finishCalibZ(false);
             return;
         }
-        const double z = m_calibZStartZ + m_calibZCurrentStep * m_calibZDeltaMm;
+        // Each step moves −Z, so actual Z decreases by calibZDeltaMm per step.
+        const double z = m_calibZStartZ - m_calibZCurrentStep * m_calibZDeltaMm;
         m_calibZPoints.push_back({z, row});
         m_calibZCurrentStep++;
 
@@ -392,7 +393,7 @@ void ScannerTab::onStepReady(const QString &)
                 tr("Z-calib: moving to step %1/%2…")
                     .arg(m_calibZCurrentStep + 1).arg(m_calibZTotalSteps));
             QMetaObject::invokeMethod(m_stage,
-                [s = m_stage, dz = m_calibZDeltaMm] { s->moveRelative(0.0, 0.0, dz); });
+                [s = m_stage, dz = m_calibZDeltaMm] { s->moveRelative(0.0, 0.0, -dz); });
         }
         return;
     }
@@ -439,10 +440,16 @@ void ScannerTab::onStepReady(const QString &)
     if (m_currentStep >= static_cast<int>(m_xPositions.size())) {
         finishScan();
     } else {
-        const double nextX = m_xPositions[static_cast<std::size_t>(m_currentStep)];
+        // Use moveRelative so the delta is independent of the stale m_position
+        // in LStepStage. moveAbsolute computes (target − m_position) at call
+        // time, but m_position is only updated after movementFinished fires via
+        // an async enqueuePositionQuery(), so it still holds the pre-move value
+        // here.  The step delta is exact from the pre-computed position list.
+        const double dx = m_xPositions[static_cast<std::size_t>(m_currentStep)]
+                        - m_xPositions[static_cast<std::size_t>(m_currentStep) - 1];
         QMetaObject::invokeMethod(m_stage,
-            [s = m_stage, nextX, y = m_scanY, z = m_scanZ] {
-                s->moveAbsolute(nextX, y, z);
+            [s = m_stage, dx] {
+                s->moveRelative(dx, 0.0, 0.0);
             });
     }
 }
@@ -619,10 +626,11 @@ void ScannerTab::onCalibrateZ()
     auto *nSpin = new QSpinBox;
     nSpin->setRange(2, 20);
     nSpin->setValue(5);
-    form->addRow(tr("Step size (+Z per step):"), deltaSpin);
-    form->addRow(tr("Number of steps:"),         nSpin);
+    form->addRow(tr("Step size (mm, −Z per step):"), deltaSpin);
+    form->addRow(tr("Number of steps:"),              nSpin);
     form->addRow(new QLabel(tr("Place a flat, diffuse surface in the laser plane.\n"
-                               "The stage will move upward by step × n steps.")));
+                               "The stage will move downward (−Z) by step × n steps.\n"
+                               "Make sure there is enough −Z travel from the current position.")));
     auto *btnBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     connect(btnBox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(btnBox, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
@@ -665,8 +673,9 @@ void ScannerTab::onCalibrateZ()
     if (m_calibZCurrentStep >= m_calibZTotalSteps) { finishCalibZ(true); return; }
 
     m_statusLabel->setText(tr("Z-calib: moving to step 2/%1…").arg(m_calibZTotalSteps));
+    // Move downward (−Z) to stay well away from the null switch at swZ = 0.
     QMetaObject::invokeMethod(m_stage,
-        [s = m_stage, dz = m_calibZDeltaMm] { s->moveRelative(0.0, 0.0, dz); });
+        [s = m_stage, dz = m_calibZDeltaMm] { s->moveRelative(0.0, 0.0, -dz); });
 }
 
 void ScannerTab::finishCalibZ(bool success)
@@ -676,6 +685,16 @@ void ScannerTab::finishCalibZ(bool success)
     m_startBtn->setEnabled(true);
     m_acqThread->startAcquisition();
     emit scanActiveChanged(false);
+
+    // Always return to starting Z regardless of success/failure so Z is never
+    // stranded partway through the calibration travel.
+    if (m_stage && m_calibZCurrentStep > 0) {
+        // We moved downward (−Z) m_calibZCurrentStep−1 times; return upward (+Z).
+        const double returnDz = +(m_calibZCurrentStep - 1) * m_calibZDeltaMm;
+        if (std::abs(returnDz) > 1e-6)
+            QMetaObject::invokeMethod(m_stage,
+                [s = m_stage, dz = returnDz] { s->moveRelative(0.0, 0.0, dz); });
+    }
 
     if (!success) {
         m_statusLabel->setText(tr("Z calibration failed."));
@@ -688,19 +707,14 @@ void ScannerTab::finishCalibZ(bool success)
 
     if (calib.scale_z <= 0.0) {
         QMessageBox::warning(this, tr("Calibrate Z"),
-            tr("Computed scale_z is not positive — make sure the stage moved in the +Z direction."));
+            tr("Computed scale_z is not positive — check that the laser line shifts "
+               "visibly as Z changes."));
         m_statusLabel->setText(tr("Z calibration failed: invalid scale_z."));
         return;
     }
 
     m_yRefSpin->setValue(calib.y_ref);
     m_scaleZSpin->setValue(calib.scale_z);
-
-    // Return stage to starting Z
-    const double returnDz = -(m_calibZCurrentStep - 1) * m_calibZDeltaMm;
-    if (std::abs(returnDz) > 1e-6)
-        QMetaObject::invokeMethod(m_stage,
-            [s = m_stage, dz = returnDz] { s->moveRelative(0.0, 0.0, dz); });
 
     m_statusLabel->setText(
         tr("Z-calib done: y_ref = %1 px,  scale_z = %2 mm/px  (%3 points)")

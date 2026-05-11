@@ -16,6 +16,7 @@
 #include <QSerialPortInfo>
 #include <QFrame>
 #include <QTabWidget>
+#include <QFileInfo>
 
 SidebarWidget::SidebarWidget(QWidget *parent)
     : QWidget(parent)
@@ -172,6 +173,8 @@ void SidebarWidget::buildStageConnectSection(QGroupBox *gb)
 
     auto *connRow = new QHBoxLayout;
     m_portCombo = new QComboBox(gb);
+    m_portCombo->setEditable(true);                              // Allow manual typing
+    m_portCombo->setInsertPolicy(QComboBox::NoInsert);           // Don't auto-add typed text to list
     auto *portRefreshBtn = new QPushButton(tr("↺"), gb);
     portRefreshBtn->setFixedWidth(28);
     portRefreshBtn->setToolTip(tr("Refresh port list"));
@@ -305,9 +308,22 @@ void SidebarWidget::buildStageControlSection(QGroupBox *gb)
     m_gotoY = makeGoSpin(tr("Y:"));
     m_gotoZ = makeGoSpin(tr("Z:"));
 
+    // Lock all three fields against position-poll overwrite the moment the user
+    // changes a value while focused (hasFocus() guards against our own setValue calls).
+    connect(m_gotoX, &QDoubleSpinBox::valueChanged, this, [this](double) {
+        if (m_gotoX->hasFocus()) m_gotoEdited = true;
+    });
+    connect(m_gotoY, &QDoubleSpinBox::valueChanged, this, [this](double) {
+        if (m_gotoY->hasFocus()) m_gotoEdited = true;
+    });
+    connect(m_gotoZ, &QDoubleSpinBox::valueChanged, this, [this](double) {
+        if (m_gotoZ->hasFocus()) m_gotoEdited = true;
+    });
+
     auto *goBtn = new QPushButton(tr("Move to Position"), gb);
     lay->addWidget(goBtn);
     connect(goBtn, &QPushButton::clicked, this, [this] {
+        m_gotoEdited = false;   // re-enable auto-sync after move
         emit moveAbsoluteRequested(m_gotoX->value(), m_gotoY->value(), m_gotoZ->value());
     });
 
@@ -437,11 +453,16 @@ void SidebarWidget::updatePosition(double x, double y, double z)
         m_relLabelX->setText(formatPosition(x - m_originX));
         m_relLabelY->setText(formatPosition(y - m_originY));
     }
-    // Keep goto spin boxes in sync with current position when not being edited,
-    // so the user only needs to change the axis they want to move.
-    if (!m_gotoX->hasFocus()) { const QSignalBlocker b(m_gotoX); m_gotoX->setValue(x); }
-    if (!m_gotoY->hasFocus()) { const QSignalBlocker b(m_gotoY); m_gotoY->setValue(y); }
-    if (!m_gotoZ->hasFocus()) { const QSignalBlocker b(m_gotoZ); m_gotoZ->setValue(z); }
+    // Keep goto spinboxes in sync with current position, but only while the user
+    // has no unsent edits.  Once any field is edited all three are frozen until
+    // Move to Position is clicked (which clears m_gotoEdited).
+    if (!m_gotoEdited) {
+        if (!m_gotoX->hasFocus() && !m_gotoY->hasFocus() && !m_gotoZ->hasFocus()) {
+            { const QSignalBlocker b(m_gotoX); m_gotoX->setValue(x); }
+            { const QSignalBlocker b(m_gotoY); m_gotoY->setValue(y); }
+            { const QSignalBlocker b(m_gotoZ); m_gotoZ->setValue(z); }
+        }
+    }
 }
 
 void SidebarWidget::refreshPortList()
@@ -449,11 +470,29 @@ void SidebarWidget::refreshPortList()
     const QSignalBlocker bl(m_portCombo);
     const QString current = m_portCombo->currentText();
     m_portCombo->clear();
-    for (const auto &info : QSerialPortInfo::availablePorts())
+
+    // 1. Add standard hardware ports
+    for (const auto &info : QSerialPortInfo::availablePorts()) {
         m_portCombo->addItem(info.systemLocation());
+    }
+
+    // 2. Add specific pseudo-terminal symlink (The "Working" logic)
+    QString ptyPath = QStringLiteral("/tmp/lstep-app"); 
+    if (QFileInfo::exists(ptyPath)) {
+        if (m_portCombo->findText(ptyPath) == -1) {
+            m_portCombo->addItem(ptyPath);
+        }
+    }
+
+    // 3. Restore selection
     if (!current.isEmpty()) {
         const int idx = m_portCombo->findText(current);
-        if (idx >= 0) m_portCombo->setCurrentIndex(idx);
+        if (idx >= 0) {
+            m_portCombo->setCurrentIndex(idx);
+        } else {
+            // If it's a manually typed path, keep it in the box
+            m_portCombo->setEditText(current);
+        }
     }
 }
 
