@@ -40,6 +40,10 @@ signals:
     // Emitted at scan start/end so MainWindow can disable the sidebar.
     void scanActiveChanged(bool active);
 
+    // Emitted after each scan step frame grab so MainWindow can forward it to
+    // CameraView — lets the user see what the scanner captured at each position.
+    void previewFrameReady(const QImage &img);
+
 private slots:
     void onStartOrAbort();
     void onBrowseOutput();
@@ -79,8 +83,9 @@ private:
     QDoubleSpinBox *m_startXSpin  = nullptr;
     QDoubleSpinBox *m_endXSpin    = nullptr;
     QDoubleSpinBox *m_stepSpin    = nullptr;
-    QSpinBox       *m_threshSpin  = nullptr;
-    QDoubleSpinBox *m_expSpin     = nullptr;
+    QSpinBox       *m_threshSpin    = nullptr;
+    QDoubleSpinBox *m_expSpin       = nullptr;
+    QDoubleSpinBox *m_scatterSpin   = nullptr;
     QLabel         *m_outputLabel = nullptr;
     QDoubleSpinBox *m_yRefSpin    = nullptr;
     QDoubleSpinBox *m_scaleZSpin  = nullptr;

@@ -21,16 +21,15 @@ struct CameraParams {
     AcquisitionMode mode{AcquisitionMode::SoftwareTrigger};
 };
 
-// Frame data is always 16-bit monochrome, row-major.
-// IDSCamera expands Mono8→16 (×256) and Mono12→16 (<<4) before returning.
+// Frame data is 8-bit monochrome, row-major.
 struct Frame {
-    std::vector<uint16_t> data;
+    std::vector<uint8_t> data;
     int width{0};
     int height{0};
 
     bool valid() const noexcept { return !data.empty() && width > 0 && height > 0; }
 
-    uint16_t pixel(int col, int row) const noexcept {
+    uint8_t pixel(int col, int row) const noexcept {
         return data[static_cast<std::size_t>(row * width + col)];
     }
 };

@@ -9,11 +9,11 @@ namespace scanner {
 LaserProfile extractLaserProfile(const Frame& frame, const ExtractorParams& params)
 {
     return extractLaserProfile(
-        std::span<const uint16_t>(frame.data.data(), frame.data.size()),
+        std::span<const uint8_t>(frame.data.data(), frame.data.size()),
         frame.width, frame.height, params);
 }
 
-LaserProfile extractLaserProfile(std::span<const uint16_t> data,
+LaserProfile extractLaserProfile(std::span<const uint8_t> data,
                                   int width, int height,
                                   const ExtractorParams& params)
 {
@@ -24,10 +24,10 @@ LaserProfile extractLaserProfile(std::span<const uint16_t> data,
 
     for (int col = 0; col < width; ++col) {
         // Step 1: find peak row across entire column
-        uint16_t peakVal = 0;
-        int      peakRow = 0;
+        uint8_t peakVal = 0;
+        int     peakRow = 0;
         for (int row = 0; row < height; ++row) {
-            const uint16_t v = data[static_cast<std::size_t>(row * width + col)];
+            const uint8_t v = data[static_cast<std::size_t>(row * width + col)];
             if (v > peakVal) { peakVal = v; peakRow = row; }
         }
         if (peakVal <= params.threshold) continue;
@@ -68,7 +68,7 @@ LaserProfile extractLaserProfile(std::span<const uint16_t> data,
         for (int row = rowMin; row < rowMax; ++row) {
             const double v = static_cast<double>(
                 data[static_cast<std::size_t>(row * width + col)]);
-            if (v > params.threshold) {
+            if (v > static_cast<double>(params.threshold)) {
                 sumW  += v;
                 sumWY += v * row;
             }
@@ -76,6 +76,34 @@ LaserProfile extractLaserProfile(std::span<const uint16_t> data,
         if (sumW > 0.0) {
             result.rowPositions[static_cast<std::size_t>(col)] = sumWY / sumW;
             ++result.validColumns;
+        }
+    }
+
+    // Post-extraction median filter: collect valid row positions, find the
+    // median, then invalidate any column that deviates more than
+    // medianRejectRows from it.  This removes isolated hot-pixel hits and
+    // ambient-light reflections that survive the threshold but are far from
+    // the main laser stripe.
+    if (params.medianRejectRows > 0.0 && result.validColumns >= 2) {
+        std::vector<double> valid;
+        valid.reserve(static_cast<std::size_t>(result.validColumns));
+        for (double r : result.rowPositions)
+            if (r >= 0.0) valid.push_back(r);
+
+        std::sort(valid.begin(), valid.end());
+        const std::size_t mid = valid.size() / 2;
+        const double median = (valid.size() % 2 == 1)
+                            ? valid[mid]
+                            : (valid[mid - 1] + valid[mid]) * 0.5;
+
+        result.validColumns = 0;
+        for (double &r : result.rowPositions) {
+            if (r >= 0.0) {
+                if (std::abs(r - median) > params.medianRejectRows)
+                    r = -1.0;
+                else
+                    ++result.validColumns;
+            }
         }
     }
 

@@ -36,7 +36,11 @@ void AcquisitionThread::stopAcquisition()
         QMutexLocker locker(&m_mutex);
         m_shouldRun = false;
     }
-    m_running = false;
+    // Do NOT set m_running = false here. The thread sets it itself after its
+    // current grabFrame() call returns. isGrabbing() only goes false once the
+    // thread has actually exited the grab, so the scanner's
+    //   while (isGrabbing()) msleep(5)
+    // correctly serialises access to the camera fd.
     m_cond.wakeAll();
 }
 

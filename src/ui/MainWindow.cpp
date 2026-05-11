@@ -144,6 +144,12 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_cameraView, &CameraView::measurementResult,
             this, [this](const QString &txt) { statusBar()->showMessage(txt, 5000); });
 
+    // Forward per-step scan frames to CameraView so the laser line is visible
+    // during scanning (acquisition thread is stopped; this replaces frameReady).
+    connect(m_scannerTab, &ScannerTab::previewFrameReady,
+            m_cameraView, &CameraView::onFrameReady,
+            Qt::QueuedConnection);
+
     // Disable Microscope jog panel while a scan is running
     connect(m_scannerTab, &ScannerTab::scanActiveChanged,
             m_sidebar->evaluatePanel(), &QWidget::setDisabled);

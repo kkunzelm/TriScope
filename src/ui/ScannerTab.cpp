@@ -44,6 +44,15 @@
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+// Drain any frames that were buffered before the most recent stage move, then
+// return a fresh frame captured after the stage stopped.  Without this, V4L2
+// cameras may return a frame from up to ~N_buffers ago.
+static std::optional<QImage> grabFreshFrame(ICameraDevice *camera, int timeoutMs)
+{
+    while (camera->grabFrame(0).has_value()) {}   // flush stale frames
+    return camera->grabFrame(timeoutMs);
+}
+
 static scanner::Frame qImageToScannerFrame(const QImage &img)
 {
     scanner::Frame frame;
@@ -55,7 +64,7 @@ static scanner::Frame qImageToScannerFrame(const QImage &img)
         const uchar *line = gray.constScanLine(row);
         for (int col = 0; col < gray.width(); ++col)
             frame.data[static_cast<std::size_t>(row * gray.width() + col)] =
-                static_cast<uint16_t>(line[col]) << 8;
+                static_cast<uint8_t>(line[col]);
     }
     return frame;
 }
@@ -64,14 +73,12 @@ static scanner::Frame qImageToScannerFrame(const QImage &img)
 // Histogram helper
 // ---------------------------------------------------------------------------
 
-// threshVal is the raw 16-bit threshold value from the spinbox (0–65535).
-// Camera pixels are 8-bit shifted left by 8, so actual values are multiples
-// of 256 in the range 0–65280.  The 256 histogram bins map to that range.
+// threshVal is the 8-bit threshold value from the spinbox (0–255).
 static QPixmap buildHistogramPixmap(const std::array<int,256> &hist, int threshVal)
 {
     constexpr int    W      = 900, H = 480;
-    constexpr int    mL     = 64, mR = 24, mT = 24, mB = 54;
-    constexpr double kMax16 = 65280.0;   // 255 << 8
+    constexpr int    mL     = 24, mR = 24, mT = 24, mB = 54;
+    constexpr double kMax8 = 255.0;
     const int pW = W - mL - mR;
     const int pH = H - mT - mB;
 
@@ -80,18 +87,15 @@ static QPixmap buildHistogramPixmap(const std::array<int,256> &hist, int threshV
     QPainter p(&pix);
     p.setRenderHint(QPainter::Antialiasing, false);
 
-    // log scale max
+    // Linear scale max
     int mx = 1;
     for (int v : hist) if (v > mx) mx = v;
-    const double logMax = std::log10(static_cast<double>(mx) + 1.0);
 
-    // Step-function polygon — each of the 256 bins spans [b*256, (b+1)*256)
-    // in 16-bit space.  The polygon outline gives a clear histogram shape.
+    // Step-function polygon — each of the 256 bins maps to one 8-bit value.
     QPainterPath path;
     path.moveTo(mL, mT + pH);
     for (int b = 0; b < 256; ++b) {
-        const double lv = std::log10(static_cast<double>(hist[b]) + 1.0);
-        const int bh    = static_cast<int>(lv / logMax * pH);
+        const int bh    = static_cast<int>(static_cast<double>(hist[b]) / mx * pH);
         const double x0 = mL + b       * static_cast<double>(pW) / 256.0;
         const double x1 = mL + (b + 1) * static_cast<double>(pW) / 256.0;
         path.lineTo(x0, mT + pH - bh);
@@ -104,15 +108,15 @@ static QPixmap buildHistogramPixmap(const std::array<int,256> &hist, int threshV
     p.setPen(QPen(QColor(40, 70, 150), 1));
     p.drawPath(path);
 
-    // Threshold line — positioned using the raw 16-bit value
+    // Threshold line
     if (threshVal >= 0) {
-        const int tx = mL + static_cast<int>(threshVal / kMax16 * pW);
+        const int tx = mL + static_cast<int>(threshVal / kMax8 * pW);
         p.setPen(QPen(Qt::red, 2));
         p.drawLine(tx, mT, tx, mT + pH);
         p.setPen(Qt::red);
         p.setFont(QFont(QString{}, 9));
         const QString lbl = QString("thresh=%1").arg(threshVal);
-        const int lblX = (threshVal < 51200) ? tx + 4 : tx - 95;
+        const int lblX = (threshVal < 200) ? tx + 4 : tx - 95;
         p.drawText(lblX, mT + 16, lbl);
     }
 
@@ -120,32 +124,15 @@ static QPixmap buildHistogramPixmap(const std::array<int,256> &hist, int threshV
     p.setPen(QPen(Qt::black, 1));
     p.drawRect(mL, mT, pW, pH);
 
-    // X ticks + labels in 16-bit space
+    // X ticks + labels (8-bit, 0–255)
     p.setFont(QFont(QString{}, 9));
     p.setPen(Qt::black);
-    for (int v : {0, 10000, 20000, 30000, 40000, 50000, 60000, 65280}) {
-        const int x = mL + static_cast<int>(v / kMax16 * pW);
+    for (int v : {0, 32, 64, 96, 128, 160, 192, 224, 255}) {
+        const int x = mL + static_cast<int>(v / kMax8 * pW);
         p.drawLine(x, mT + pH, x, mT + pH + 4);
-        p.drawText(x - 22, mT + pH + 18, QString::number(v));
+        p.drawText(x - 10, mT + pH + 18, QString::number(v));
     }
-    p.drawText(mL + pW / 2 - 60, H - 10, "Intensity (16-bit)");
-
-    // Y log-scale ticks
-    for (int exp = 0; exp <= static_cast<int>(logMax); ++exp) {
-        const int y = mT + pH - static_cast<int>(exp / logMax * pH);
-        p.setPen(QPen(Qt::black, 1));
-        p.drawLine(mL - 4, y, mL, y);
-        p.setFont(QFont(QString{}, 8));
-        p.drawText(4, y + 4, QString("1e%1").arg(exp));
-    }
-
-    // Y label (rotated)
-    p.save();
-    p.setFont(QFont(QString{}, 9));
-    p.translate(14, mT + pH / 2 + 35);
-    p.rotate(-90);
-    p.drawText(0, 0, "log(count)");
-    p.restore();
+    p.drawText(mL + pW / 2 - 40, H - 10, "Intensity (8-bit)");
 
     return pix;
 }
@@ -281,8 +268,8 @@ void ScannerTab::buildUI()
     auto *camForm  = new QFormLayout(camGroup);
 
     m_threshSpin = new QSpinBox;
-    m_threshSpin->setRange(0, 65535);
-    m_threshSpin->setValue(500);
+    m_threshSpin->setRange(0, 255);
+    m_threshSpin->setValue(50);
 
     m_expSpin = new QDoubleSpinBox;
     m_expSpin->setRange(10, 100000);
@@ -290,8 +277,16 @@ void ScannerTab::buildUI()
     m_expSpin->setSuffix(" µs");
     m_expSpin->setValue(500.0);
 
-    camForm->addRow(tr("Threshold:"),  m_threshSpin);
-    camForm->addRow(tr("Exposure:"),   m_expSpin);
+    m_scatterSpin = new QDoubleSpinBox;
+    m_scatterSpin->setRange(0, 9999);
+    m_scatterSpin->setDecimals(1);
+    m_scatterSpin->setSuffix(" px");
+    m_scatterSpin->setValue(50.0);
+    m_scatterSpin->setToolTip(tr("Max deviation from median laser-line row before a column is rejected as an outlier (0 = disabled)"));
+
+    camForm->addRow(tr("Threshold:"),    m_threshSpin);
+    camForm->addRow(tr("Exposure:"),     m_expSpin);
+    camForm->addRow(tr("Max scatter:"),  m_scatterSpin);
 
     auto *histBtn = new QPushButton(tr("Histogram…"));
     camForm->addRow(histBtn);
@@ -514,12 +509,13 @@ void ScannerTab::onStepReady(const QString &)
             tr("Z-calib: capturing point %1/%2…")
                 .arg(m_calibZCurrentStep + 1).arg(m_calibZTotalSteps));
 
-        auto maybe = m_camera->grabFrame(2000);
+        auto maybe = grabFreshFrame(m_camera, 2000);
         if (!maybe.has_value()) { finishCalibZ(false); return; }
 
         const scanner::Frame frame = qImageToScannerFrame(maybe.value());
         scanner::ExtractorParams ep;
-        ep.threshold = static_cast<uint16_t>(m_threshSpin->value());
+        ep.threshold        = static_cast<uint8_t>(m_threshSpin->value());
+        ep.medianRejectRows = m_scatterSpin->value();
         const double row = meanValidRow(scanner::extractLaserProfile(frame, ep));
         if (row < 0.0) {
             QMessageBox::warning(this, tr("Calibrate Z"),
@@ -548,7 +544,7 @@ void ScannerTab::onStepReady(const QString &)
     if (!m_scanning) return;
 
     // Capture one frame
-    auto maybeFrame = m_camera->grabFrame(2000);
+    auto maybeFrame = grabFreshFrame(m_camera, 2000);
     if (!maybeFrame.has_value()) {
         m_scanning = false;
         m_acqThread->startAcquisition();
@@ -558,17 +554,16 @@ void ScannerTab::onStepReady(const QString &)
         return;
     }
 
-    // Update live preview
+    // Forward the grabbed frame to CameraView so the user can see what the
+    // scanner captured at this step (acquisition thread is stopped during scan).
     const QImage &img = maybeFrame.value();
-    m_preview->setPixmap(
-        QPixmap::fromImage(img).scaled(m_preview->size(),
-                                       Qt::KeepAspectRatio,
-                                       Qt::FastTransformation));
+    emit previewFrameReady(img);
 
-    // Convert to 16-bit scanner frame and extract laser line
+    // Convert to 8-bit scanner frame and extract laser line
     const scanner::Frame frame = qImageToScannerFrame(img);
     scanner::ExtractorParams extParams;
-    extParams.threshold = static_cast<uint16_t>(m_threshSpin->value());
+    extParams.threshold        = static_cast<uint8_t>(m_threshSpin->value());
+    extParams.medianRejectRows = m_scatterSpin->value();
     const scanner::LaserProfile profile = scanner::extractLaserProfile(frame, extParams);
 
     // Project to 3D and accumulate
@@ -702,7 +697,7 @@ void ScannerTab::onShowHistogram()
             m_acqThread->stopAcquisition();
             while (m_acqThread->isGrabbing()) QThread::msleep(5);
         }
-        auto maybe = m_camera->grabFrame(2000);
+        auto maybe = grabFreshFrame(m_camera, 2000);
         if (was) m_acqThread->startAcquisition();
         if (!maybe.has_value()) return std::nullopt;
 
@@ -871,12 +866,13 @@ void ScannerTab::onCalibrateZ()
     m_calibStatusLabel->setText(tr("Z-calib: capturing point 1/%1…").arg(m_calibZTotalSteps));
 
     // Capture first frame at current Z (step 0)
-    auto maybe = m_camera->grabFrame(2000);
+    auto maybe = grabFreshFrame(m_camera, 2000);
     if (!maybe.has_value()) { finishCalibZ(false); return; }
 
     const scanner::Frame frame0 = qImageToScannerFrame(maybe.value());
     scanner::ExtractorParams ep;
-    ep.threshold = static_cast<uint16_t>(m_threshSpin->value());
+    ep.threshold        = static_cast<uint8_t>(m_threshSpin->value());
+    ep.medianRejectRows = m_scatterSpin->value();
     const double row0 = meanValidRow(scanner::extractLaserProfile(frame0, ep));
     if (row0 < 0.0) {
         QMessageBox::warning(this, tr("Calibrate Z"), tr("No laser line found — check threshold."));
@@ -963,7 +959,7 @@ void ScannerTab::onCalibrateY()
     while (m_acqThread->isGrabbing())
         QThread::msleep(5);
     m_camera->setExposure(m_expSpin->value());
-    auto maybe = m_camera->grabFrame(2000);
+    auto maybe = grabFreshFrame(m_camera, 2000);
     m_acqThread->startAcquisition();
 
     if (!maybe.has_value()) {
@@ -973,7 +969,8 @@ void ScannerTab::onCalibrateY()
 
     const scanner::Frame frame = qImageToScannerFrame(maybe.value());
     scanner::ExtractorParams ep;
-    ep.threshold = static_cast<uint16_t>(m_threshSpin->value());
+    ep.threshold        = static_cast<uint8_t>(m_threshSpin->value());
+    ep.medianRejectRows = m_scatterSpin->value();
     const auto profile = scanner::extractLaserProfile(frame, ep);
 
     const auto [leftCol, rightCol] = detectEdges(profile);

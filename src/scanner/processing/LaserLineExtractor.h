@@ -22,16 +22,17 @@ enum class PeakMethod {
 };
 
 struct ExtractorParams {
-    uint16_t   threshold{500};               // minimum pixel value to consider as laser
-    int        windowRows{0};                // CoG only: restrict to ±windowRows around peak
+    uint8_t    threshold{50};                // minimum pixel value to consider as laser (0–255)
+    int        windowRows{5};               // CoG fallback: restrict to ±windowRows around peak (0 = full column)
     PeakMethod method{PeakMethod::Gaussian}; // subpixel interpolation method
+    double     medianRejectRows{50.0};       // post-filter: invalidate columns deviating more than this from the median (0 = disabled)
 };
 
 // Extract the laser line position (subpixel) from a 16-bit monochrome frame.
 LaserProfile extractLaserProfile(const Frame& frame, const ExtractorParams& params = {});
 
 // Variant accepting a raw span (useful for unit tests without a full Frame object).
-LaserProfile extractLaserProfile(std::span<const uint16_t> data,
+LaserProfile extractLaserProfile(std::span<const uint8_t> data,
                                   int width, int height,
                                   const ExtractorParams& params = {});
 
