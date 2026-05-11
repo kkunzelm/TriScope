@@ -6,7 +6,7 @@ This application controls a motorised video measuring microscope that has been e
 
 The optical setup uses a **double-telecentric lens** on the camera side, which eliminates perspective distortion across the field of view. Combined with a calibrated laser triangulation geometry, this yields repeatable depth measurements that are independent of lateral object position within the field — a property that conventional camera lenses with perspective projection cannot provide.
 
-The scanner is built around existing laboratory infrastructure: a motorised XYZ microscope stage (Lang LStep 23) that provides sub-micron positional accuracy, an industrial monochrome camera (IDS Imaging), and a line laser. The software integrates these three components into a stop-and-go scan loop and exports point clouds in PLY format for further processing in tools such as CloudCompare or Geomagic.
+The scanner is built around existing laboratory infrastructure: a motorised XYZ microscope stage (Uhl MS4 with Lang LStep 23 controller) that provides 2.5 µm positional accuracy, an industrial monochrome camera (IDS Imaging), and a line laser (Rodenstock). The software integrates these three components into a stop-and-go scan loop and exports point clouds in PLY format for further processing in tools such as CloudCompare or Geomagic.
 
 ---
 
@@ -140,7 +140,7 @@ scale_y = pixel_pitch / β              [mm/px]
 
 where β is the lens magnification and Θ is the triangulation angle. These are **not entered directly** — they are determined empirically by the calibration wizards, which is preferable because β and Θ are difficult to measure independently.
 
-The hardcoded `theta_rad = 0.349066` (20°) is stored in the saved JSON for documentation only. It is not used in any computation.
+The hardcoded `theta_rad = 0.436332` (25°) is stored in the saved JSON for documentation only. It is not used in any computation.
 
 ### 5.2 Laser line extraction
 
