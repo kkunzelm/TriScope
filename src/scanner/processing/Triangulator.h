@@ -24,7 +24,7 @@ namespace scanner {
 // β = magnification of observation optics (constant across field: double telecentric)
 // All distances in mm.
 struct CalibParams {
-    double theta_rad{0.349066};  // triangulation angle Θ (~20°), informational only
+    double theta_rad{0.436332};  // triangulation angle Θ (~25°), informational only
     double y_ref{512.0};         // camera row where laser hits z=0 reference plane
     double scale_z{0.050};       // mm / pixel  (depth axis, from Z calibration)
     double scale_y{0.017};       // mm / pixel  (lateral axis, from Y calibration)

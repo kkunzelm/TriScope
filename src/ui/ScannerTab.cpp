@@ -684,7 +684,7 @@ void ScannerTab::onSaveCalib()
     if (path.isEmpty()) return;
 
     QJsonObject obj;
-    obj["theta_rad"] = 0.349066;
+    obj["theta_rad"] = 0.436332;
     obj["y_ref"]   = m_yRefSpin->value();
     obj["scale_z"] = m_scaleZSpin->value();
     obj["scale_y"] = m_scaleYSpin->value();
