@@ -187,6 +187,12 @@ The scanner projects a laser stripe across the object, moves the X stage in step
 9. Choose an output file with **Browse…**.
 10. Click **Start Scan**.
 
+![Scanned point cloud in CloudCompare](./assets/small/cloud-compare.png "Scan result displayed in CloudCompare")
+
+The high scan quality and dense point cloud facilitates triangulation to get a real surface of the scanned object.
+
+![Surface after triangulation of the scan points](./assets/small/cloud-compare-triangulate.png "Surface after triangulation of the scan points")
+
 During the scan the camera view updates with each grabbed frame so you can verify the laser line is visible. Click **Abort** to stop early; partial data is discarded.
 
 ### Stage controls during scanning
