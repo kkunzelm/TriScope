@@ -1,4 +1,4 @@
-# Technical Documentation — VideoMeasuringMicroscope
+# Technical Documentation — TriScope			
 
 ## 1. Purpose and Application Context
 

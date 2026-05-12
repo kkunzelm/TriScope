@@ -26,7 +26,7 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    setWindowTitle(tr("Video Measuring Microscope"));
+    setWindowTitle(tr("TriScope - Triangulation Scanner + Microscope"));
     // Size to ~90 % of available screen so all sidebar items are visible without manual resizing
     if (const auto *screen = QApplication::primaryScreen()) {
         const QRect avail = screen->availableGeometry();

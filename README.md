@@ -4,6 +4,8 @@ TriScope — triangulation + scope (microscope): microscope live view, precision
 
 Desktop application for a motorised video measuring microscope. Combines live camera acquisition with precision stage control to enable dimensional measurements directly from the camera image or via stage displacement. Includes a laser-line triangulation scanner that produces PLY point clouds.
 
+![TriScope GUI Scanner Tab](./assets/small/scanner-tab.png)
+
 ---
 
 ## Features
@@ -193,6 +195,8 @@ The **Stage** section of the Scanner tab lets you jog and position the stage ind
 
 ### Calibration *(Calibrate tab)*
 
+![TriScope GUI Calibration Tab](./assets/small/calibration-tab.png)
+
 The scanner uses a double-telecentric triangulation model (Weber 1995):
 
 ```
@@ -210,11 +214,15 @@ x_world = table_x                        [mm]
 
 **Z calibration (Calibrate Z…)**
 
+![Z calibration with a plane](./assets/small/calibrate-ebene.png)
+
 1. Place a flat, diffuse surface (white paper, ceramic tile) in the laser plane.
 2. Enter step size (e.g. 1 mm) and number of steps (e.g. 5). The stage moves downward (−Z) through the steps.
 3. The wizard fits `row = y_ref − z / scale_z` by least squares and updates `y_ref` and `scale_z`.
 
 **Y calibration (Calibrate Y…)**
+
+![Y calibration](./assets/small/calibrate-stufe.png)
 
 1. Place an object of exactly known width in the laser plane so both edges are visible.
 2. Enter the width in mm.
