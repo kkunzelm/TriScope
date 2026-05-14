@@ -21,7 +21,7 @@ PointCloud projectTo3D(const LaserProfile& profile,
         if (yPx < 0.0) continue;
 
         const double z = (params.y_ref - yPx) * params.scale_z;
-        const double y = (static_cast<double>(col) - params.cx) * params.scale_y;
+        const double y = (params.cx - static_cast<double>(col)) * params.scale_y;
 
         cloud.emplace_back(xTableMm, y, z);
     }
