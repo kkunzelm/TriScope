@@ -59,6 +59,7 @@ private slots:
 
 private:
     void buildUI();
+    void applyCalibJson(const QJsonObject &obj);
     void startScan();
     void abortScan();
     void finishScan();
@@ -86,7 +87,8 @@ private:
     QSpinBox       *m_threshSpin    = nullptr;
     QDoubleSpinBox *m_expSpin       = nullptr;
     QDoubleSpinBox *m_scatterSpin   = nullptr;
-    QLabel         *m_outputLabel = nullptr;
+    QLabel         *m_outputLabel    = nullptr;
+    QComboBox      *m_plyFormatCombo = nullptr;
     QDoubleSpinBox *m_yRefSpin    = nullptr;
     QDoubleSpinBox *m_scaleZSpin  = nullptr;
     QDoubleSpinBox *m_scaleYSpin  = nullptr;

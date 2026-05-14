@@ -149,6 +149,10 @@ static QPixmap buildHistogramPixmap(const std::array<int,256> &hist, int threshV
 ScannerTab::ScannerTab(QWidget *parent) : QWidget(parent)
 {
     buildUI();
+
+    QFile f(QStringLiteral("calib.json"));
+    if (f.open(QIODevice::ReadOnly))
+        applyCalibJson(QJsonDocument::fromJson(f.readAll()).object());
 }
 
 void ScannerTab::buildUI()
@@ -236,6 +240,15 @@ void ScannerTab::buildUI()
         });
     });
 
+    auto *setHomeBtn = new QPushButton(tr("Set WCS Origin"), m_stageGroup);
+    setHomeBtn->setToolTip(tr("Declare the current physical position as software (0, 0, 0). "
+                              "No movement — purely a coordinate reset. WCS = work coordinate system."));
+    stageLay->addWidget(setHomeBtn);
+    connect(setHomeBtn, &QPushButton::clicked, this, [this] {
+        if (!m_stage || m_scanning) return;
+        QMetaObject::invokeMethod(m_stage, &IPositioningStage::setHome);
+    });
+
     auto *wcsBtn = new QPushButton(tr("Move to WCS Origin"), m_stageGroup);
     stageLay->addWidget(wcsBtn);
     connect(wcsBtn, &QPushButton::clicked, this, [this] {
@@ -320,7 +333,11 @@ void ScannerTab::buildUI()
     m_outputLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto *browseBtn = new QPushButton(tr("Browse…"));
     connect(browseBtn, &QPushButton::clicked, this, &ScannerTab::onBrowseOutput);
+    m_plyFormatCombo = new QComboBox;
+    m_plyFormatCombo->addItem(tr("Binary"), static_cast<int>(scanner::PlyFormat::BinaryLittleEndian));
+    m_plyFormatCombo->addItem(tr("ASCII"),     static_cast<int>(scanner::PlyFormat::Ascii));
     outLayout->addWidget(m_outputLabel, 1);
+    outLayout->addWidget(m_plyFormatCombo);
     outLayout->addWidget(browseBtn);
 
     // ── Calibration ─────────────────────────────────────────────────────────
@@ -631,7 +648,7 @@ void ScannerTab::finishScan()
         writer.write(
             std::span<const Eigen::Vector3d>(m_cloud.data(), m_cloud.size()),
             std::filesystem::path(outPath.toStdString()),
-            scanner::PlyFormat::BinaryLittleEndian);
+            static_cast<scanner::PlyFormat>(m_plyFormatCombo->currentData().toInt()));
         m_statusLabel->setText(
             tr("Done. %1 points → %2").arg(m_cloud.size()).arg(outPath));
     } catch (const std::exception &e) {
@@ -666,6 +683,14 @@ void ScannerTab::onSetEndX()
         m_endXSpin->setValue(m_stage->position().x);
 }
 
+void ScannerTab::applyCalibJson(const QJsonObject &obj)
+{
+    m_yRefSpin->setValue(  obj.value("y_ref")  .toDouble(m_yRefSpin->value()));
+    m_scaleZSpin->setValue(obj.value("scale_z").toDouble(m_scaleZSpin->value()));
+    m_scaleYSpin->setValue(obj.value("scale_y").toDouble(m_scaleYSpin->value()));
+    m_cxSpin->setValue(    obj.value("cx")     .toDouble(m_cxSpin->value()));
+}
+
 void ScannerTab::onLoadCalib()
 {
     const QString path = QFileDialog::getOpenFileName(
@@ -677,11 +702,7 @@ void ScannerTab::onLoadCalib()
         QMessageBox::warning(this, tr("Scanner"), tr("Cannot open file."));
         return;
     }
-    const QJsonObject obj = QJsonDocument::fromJson(f.readAll()).object();
-    m_yRefSpin->setValue(  obj.value("y_ref")  .toDouble(m_yRefSpin->value()));
-    m_scaleZSpin->setValue(obj.value("scale_z").toDouble(m_scaleZSpin->value()));
-    m_scaleYSpin->setValue(obj.value("scale_y").toDouble(m_scaleYSpin->value()));
-    m_cxSpin->setValue(    obj.value("cx")     .toDouble(m_cxSpin->value()));
+    applyCalibJson(QJsonDocument::fromJson(f.readAll()).object());
 }
 
 void ScannerTab::onSaveCalib()
