@@ -20,7 +20,7 @@ PointCloud projectTo3D(const LaserProfile& profile,
         const double yPx = profile.rowPositions[static_cast<std::size_t>(col)];
         if (yPx < 0.0) continue;
 
-        const double z = (params.y_ref - yPx) * params.scale_z;
+        const double z = (yPx - params.y_ref) * params.scale_z;
         const double y = (static_cast<double>(col) - params.cx) * params.scale_y;
 
         cloud.emplace_back(xTableMm, y, z);
@@ -37,7 +37,7 @@ CalibParams calibrateFromZPoints(std::span<const ZCalibPoint> points,
     if (n < 2) return params;
 
     // Least-squares linear fit: row = a + b * z
-    // where  a = y_ref,  b = -1 / scale_z
+    // where  a = y_ref,  b = 1 / scale_z
     double sum_z  = 0.0, sum_r  = 0.0;
     double sum_z2 = 0.0, sum_zr = 0.0;
     for (const auto& p : points) {
@@ -56,7 +56,7 @@ CalibParams calibrateFromZPoints(std::span<const ZCalibPoint> points,
     if (std::abs(b) < 1e-12) return params;
 
     params.y_ref   = a;
-    params.scale_z = -1.0 / b;  // negative: row decreases as z increases
+    params.scale_z = 1.0 / b;   // positive: row increases as z increases (CCW rotation)
     return params;
 }
 
