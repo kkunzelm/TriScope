@@ -2,6 +2,8 @@
 
 #include <QWidget>
 #include <QImage>
+#include <QVector>
+#include <QPointF>
 #include "ui/MeasurementOverlay.h"
 
 // Displays live camera frames with optional overlays:
@@ -26,6 +28,10 @@ public:
 
 public slots:
     void onFrameReady(const QImage &frame);
+    // Points in original image-pixel coordinates (before the scanner's 90° CCW rotation).
+    // gauss = green, cog = yellow; cleared automatically when scanActiveChanged fires.
+    void setLaserOverlay(const QVector<QPointF> &gauss, const QVector<QPointF> &cog);
+    void clearLaserOverlay();
 
 signals:
     void measurementResult(const QString &text);
@@ -38,13 +44,16 @@ protected:
 private:
     void drawCrosshair(QPainter &p) const;
     void drawGrid(QPainter &p) const;
+    void drawLaserOverlay(QPainter &p) const;
 
-    // Map a widget coordinate to image-pixel coordinates (respecting aspect fit).
     QPointF widgetToImage(const QPointF &widgetPt) const;
-    QRectF  imageRect() const; // sub-rect within widget where image is drawn
+    QPointF imageToWidget(const QPointF &imgPt) const;
+    QRectF  imageRect() const;
 
     QImage             m_frame;
     bool               m_showCrosshair = false;
     bool               m_showGrid      = false;
     MeasurementOverlay m_overlay;
+    QVector<QPointF>   m_gaussPoints;  // image-pixel coords, drawn green
+    QVector<QPointF>   m_cogPoints;    // image-pixel coords, drawn yellow
 };

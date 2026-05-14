@@ -26,6 +26,20 @@ CameraView::CameraView(QWidget *parent)
 void CameraView::setCrosshairVisible(bool v) { m_showCrosshair = v; update(); }
 void CameraView::setGridVisible(bool v)      { m_showGrid = v;      update(); }
 
+void CameraView::setLaserOverlay(const QVector<QPointF> &gauss, const QVector<QPointF> &cog)
+{
+    m_gaussPoints = gauss;
+    m_cogPoints   = cog;
+    update();
+}
+
+void CameraView::clearLaserOverlay()
+{
+    m_gaussPoints.clear();
+    m_cogPoints.clear();
+    update();
+}
+
 void CameraView::startMeasurement(MeasurementOverlay::Mode mode)
 {
     m_overlay.startTool(mode);
@@ -84,6 +98,15 @@ QPointF CameraView::widgetToImage(const QPointF &wp) const
                    (wp.y() - ir.top())  * m_frame.height() / ir.height());
 }
 
+QPointF CameraView::imageToWidget(const QPointF &imgPt) const
+{
+    const QRectF ir = imageRect();
+    if (m_frame.isNull() || ir.width() < 1 || ir.height() < 1)
+        return imgPt;
+    return QPointF(ir.left() + imgPt.x() * ir.width()  / m_frame.width(),
+                   ir.top()  + imgPt.y() * ir.height() / m_frame.height());
+}
+
 // ---------------------------------------------------------------------------
 // Painting
 // ---------------------------------------------------------------------------
@@ -107,6 +130,7 @@ void CameraView::paintEvent(QPaintEvent *)
 
     if (m_showGrid)      drawGrid(p);
     if (m_showCrosshair) drawCrosshair(p);
+    drawLaserOverlay(p);
 
     m_overlay.paint(p, ir, imgSz);
 }
@@ -147,6 +171,29 @@ void CameraView::drawGrid(QPainter &p) const
         p.drawLine(QPointF(c * cw, 0), QPointF(c * cw, height()));
     for (int r = 1; r < rows; ++r)
         p.drawLine(QPointF(0, r * ch), QPointF(width(), r * ch));
+}
+
+void CameraView::drawLaserOverlay(QPainter &p) const
+{
+    if (m_frame.isNull()) return;
+    if (m_gaussPoints.isEmpty() && m_cogPoints.isEmpty()) return;
+
+    // CoG first (yellow), then Gaussian on top (green) so green wins where they overlap.
+    struct Layer { const QVector<QPointF> *pts; QColor color; };
+    const Layer layers[] = {
+        { &m_cogPoints,   QColor(255, 220,   0, 210) },
+        { &m_gaussPoints, QColor(  0, 220,  60, 210) },
+    };
+
+    for (const auto &layer : layers) {
+        if (layer.pts->isEmpty()) continue;
+        QVector<QPointF> widgetPts;
+        widgetPts.reserve(layer.pts->size());
+        for (const QPointF &ip : *layer.pts)
+            widgetPts.append(imageToWidget(ip));
+        p.setPen(QPen(layer.color, 2.0, Qt::SolidLine, Qt::RoundCap));
+        p.drawPoints(widgetPts.constData(), widgetPts.size());
+    }
 }
 
 // ---------------------------------------------------------------------------

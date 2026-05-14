@@ -148,6 +148,16 @@ MainWindow::MainWindow(QWidget *parent)
             m_cameraView, &CameraView::onFrameReady,
             Qt::QueuedConnection);
 
+    // Forward laser line overlay (Gaussian + CoG) to CameraView.
+    connect(m_scannerTab, &ScannerTab::laserOverlayReady,
+            m_cameraView, &CameraView::setLaserOverlay,
+            Qt::QueuedConnection);
+
+    // Clear the overlay when a scan starts or ends (so it doesn't persist on
+    // top of unrelated live-view frames).
+    connect(m_scannerTab, &ScannerTab::scanActiveChanged,
+            m_cameraView, [this](bool) { m_cameraView->clearLaserOverlay(); });
+
     // Disable Microscope jog panel while a scan is running
     connect(m_scannerTab, &ScannerTab::scanActiveChanged,
             m_sidebar->evaluatePanel(), &QWidget::setDisabled);

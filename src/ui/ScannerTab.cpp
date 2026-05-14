@@ -85,6 +85,26 @@ static scanner::Frame qImageToScannerFrame(const QImage &img)
     return frame;
 }
 
+// Converts a LaserProfile (computed in the 90° CCW-rotated scanner frame) back
+// to QPointF coordinates in the original unrotated camera image.
+//
+// Rotation used in qImageToScannerFrame: rotate(-90) → 90° CCW (screen coords).
+// Forward:  (x_orig, y_orig) → (y_orig,  W_orig-1 - x_orig)  [new size: H_orig × W_orig]
+// Inverse:  (col,    row)    → (W_orig-1 - row, col)
+//         = (frameHeight-1 - rowPositions[col], col)
+static QVector<QPointF> profileToImagePoints(const scanner::LaserProfile &profile)
+{
+    QVector<QPointF> pts;
+    pts.reserve(profile.validColumns);
+    const double fhm1 = static_cast<double>(profile.frameHeight - 1);
+    for (int col = 0; col < profile.frameWidth; ++col) {
+        const double row = profile.rowPositions[static_cast<std::size_t>(col)];
+        if (row < 0.0) continue;
+        pts.append(QPointF(fhm1 - row, static_cast<double>(col)));
+    }
+    return pts;
+}
+
 // ---------------------------------------------------------------------------
 // Histogram helper
 // ---------------------------------------------------------------------------
@@ -615,6 +635,12 @@ void ScannerTab::onStepReady(const QString &)
     extParams.threshold        = static_cast<uint8_t>(m_threshSpin->value());
     extParams.medianRejectRows = m_scatterSpin->value();
     const scanner::LaserProfile profile = scanner::extractLaserProfile(frame, extParams);
+
+    // Extract CoG independently for the quality overlay (Gaussian is already above).
+    scanner::ExtractorParams cogParams = extParams;
+    cogParams.method = scanner::PeakMethod::CoG;
+    const scanner::LaserProfile cogProfile = scanner::extractLaserProfile(frame, cogParams);
+    emit laserOverlayReady(profileToImagePoints(profile), profileToImagePoints(cogProfile));
 
     // Project to 3D and accumulate
     const double xMm = m_xPositions[static_cast<std::size_t>(m_currentStep)];

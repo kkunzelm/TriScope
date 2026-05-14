@@ -3,6 +3,8 @@
 #include "scanner/processing/Triangulator.h"
 
 #include <QWidget>
+#include <QVector>
+#include <QPointF>
 #include <utility>
 #include <vector>
 
@@ -43,6 +45,11 @@ signals:
     // Emitted after each scan step frame grab so MainWindow can forward it to
     // CameraView — lets the user see what the scanner captured at each position.
     void previewFrameReady(const QImage &img);
+
+    // Emitted alongside previewFrameReady with the extracted laser line positions
+    // in original (unrotated) image-pixel coordinates.
+    // gauss = Gaussian interpolation, cog = Center of Gravity.
+    void laserOverlayReady(QVector<QPointF> gauss, QVector<QPointF> cog);
 
 private slots:
     void onStartOrAbort();
