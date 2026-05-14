@@ -56,12 +56,23 @@ static std::optional<QImage> grabFreshFrame(ICameraDevice *camera, int timeoutMs
 static scanner::Frame qImageToScannerFrame(const QImage &img)
 {
     scanner::Frame frame;
-    // Camera is mounted so the laser line runs vertically (top→bottom = Y axis)
-    // and height (Z) displaces it horizontally (left↔right).  Rotate 90° CCW so
-    // the laser becomes horizontal: columns → Y, rows → Z.  The camera preview
-    // is not affected — only the scanner processing path uses this function.
+    // The camera is mounted with the laser line running vertically
+    // (top→bottom maps to the Y axis) and the Z-displacement shifting it
+    // horizontally (left↔right).  We need to rotate 90° CCW so that after
+    // the transform the laser stripe is horizontal: image columns → Y,
+    // image rows → Z.  This makes the LaserLineExtractor find a per-row
+    // peak rather than a per-column one.
+    //
+    // QTransform::rotate() uses a left-handed (screen) convention:
+    //   positive angle → clockwise (CW)
+    //   negative angle → counter-clockwise (CCW)
+    // So rotate(-90) gives the required 90° CCW rotation.
+    // (The previous rotate(+90) was CW and produced a mirrored point cloud.)
+    //
+    // The camera live-preview path does NOT use this function; only the
+    // scanner acquisition loop calls qImageToScannerFrame().
     QImage gray = img.convertToFormat(QImage::Format_Grayscale8)
-                     .transformed(QTransform().rotate(90));
+                     .transformed(QTransform().rotate(-90));
     frame.width  = gray.width();
     frame.height = gray.height();
     frame.data.resize(static_cast<std::size_t>(gray.width() * gray.height()));
