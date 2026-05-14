@@ -306,8 +306,8 @@ void ScannerTab::buildUI()
     auto *scanGroup = new QGroupBox(tr("Scan Parameters"), this);
     auto *scanForm  = new QGridLayout(scanGroup);
 
-    m_startXSpin = new QDoubleSpinBox; m_startXSpin->setRange(-300, 300); m_startXSpin->setDecimals(3); m_startXSpin->setSuffix(" mm");
-    m_endXSpin   = new QDoubleSpinBox; m_endXSpin->setRange(-300, 300);   m_endXSpin->setDecimals(3);   m_endXSpin->setSuffix(" mm"); m_endXSpin->setValue(10.0);
+    m_startXSpin = new QDoubleSpinBox; m_startXSpin->setRange(-9999, 9999); m_startXSpin->setDecimals(3); m_startXSpin->setSuffix(" mm");
+    m_endXSpin   = new QDoubleSpinBox; m_endXSpin->setRange(-9999, 9999);   m_endXSpin->setDecimals(3);   m_endXSpin->setSuffix(" mm"); m_endXSpin->setValue(10.0);
     m_stepSpin   = new QDoubleSpinBox; m_stepSpin->setRange(0.001, 10); m_stepSpin->setDecimals(3); m_stepSpin->setSuffix(" mm"); m_stepSpin->setValue(0.1);
 
     auto *setStartBtn = new QPushButton(tr("← Pos"));
