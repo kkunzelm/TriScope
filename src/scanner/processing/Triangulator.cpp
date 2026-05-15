@@ -20,7 +20,7 @@ PointCloud projectTo3D(const LaserProfile& profile,
         const double xPx = profile.colPositions[static_cast<std::size_t>(row)];
         if (xPx < 0.0) continue;
 
-        const double z = (params.x_ref - xPx)                  * params.scale_z;
+        const double z = (xPx - params.x_ref)                  * params.scale_z;
         const double y = (params.cy    - static_cast<double>(row)) * params.scale_y;
 
         cloud.emplace_back(xTableMm, y, z);
@@ -56,7 +56,7 @@ CalibParams calibrateFromZPoints(std::span<const ZCalibPoint> points,
     if (std::abs(b) < 1e-12) return params;
 
     params.x_ref   = a;
-    params.scale_z = 1.0 / b;
+    params.scale_z = -1.0 / b;   // b<0 for vertical line (col decreases as z increases)
     return params;
 }
 
@@ -96,11 +96,11 @@ double evalTheta(double theta, const CalibScan& scan, CalibParams& params)
 
     const double meanXPx = std::accumulate(xPxAll.begin(), xPxAll.end(), 0.0)
                          / static_cast<double>(xPxAll.size());
-    params.x_ref = meanXPx + knownZ / params.scale_z;
+    params.x_ref = meanXPx - knownZ / params.scale_z;
 
     double sse = 0.0;
     for (double xp : xPxAll) {
-        const double err = (params.x_ref - xp) * params.scale_z - knownZ;
+        const double err = (xp - params.x_ref) * params.scale_z - knownZ;
         sse += err * err;
     }
     return std::sqrt(sse / static_cast<double>(xPxAll.size()));

@@ -16,7 +16,7 @@ namespace scanner {
 // Z-displacement shifts the laser stripe horizontally (column direction).
 // All parameters are defined in the raw camera frame — no rotation applied.
 //
-//   z_world = (x_ref - col_px) * scale_z    [mm]
+//   z_world = (col_px - x_ref) * scale_z    [mm]
 //   y_world = (cy    - row_px) * scale_y    [mm]
 //   x_world = table_x_mm
 //
@@ -51,7 +51,7 @@ struct ZCalibPoint {
 
 // Determine scale_z and x_ref from 2+ Z calibration points.
 //
-// Model: col = x_ref + (1 / scale_z) * z
+// Model: col = x_ref + z / scale_z   (col increases as z increases for vertical line)
 // Fit by least-squares linear regression. Only scale_z and x_ref are updated.
 CalibParams calibrateFromZPoints(std::span<const ZCalibPoint> points,
                                   CalibParams params);
