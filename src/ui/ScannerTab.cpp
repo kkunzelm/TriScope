@@ -547,6 +547,7 @@ void ScannerTab::abortScan()
     QMetaObject::invokeMethod(m_stage, &IPositioningStage::abort);
     m_acqThread->startAcquisition();
     emit scanActiveChanged(false);
+    emit laserOverlayReady({}, {});
     m_startBtn->setText(tr("Start Scan"));
     m_statusLabel->setText(tr("Aborted."));
 }
@@ -601,6 +602,7 @@ void ScannerTab::onStepReady(const QString &)
         m_scanning = false;
         m_acqThread->startAcquisition();
         emit scanActiveChanged(false);
+        emit laserOverlayReady({}, {});
         m_startBtn->setText(tr("Start Scan"));
         m_statusLabel->setText(tr("Error: frame capture failed."));
         return;
@@ -659,6 +661,7 @@ void ScannerTab::finishScan()
     m_stageGroup->setEnabled(true);
     m_acqThread->startAcquisition();
     emit scanActiveChanged(false);
+    emit laserOverlayReady({}, {});
     m_startBtn->setText(tr("Start Scan"));
 
     const QString outPath = m_outputLabel->text();
