@@ -121,13 +121,13 @@ If the controller is not power-cycled, its position registers retain their value
 
 The scanner uses the **double-telecentric laser triangulation model** from Weber (1995). The observation optics (camera lens) are double-telecentric: parallel rays enter the lens regardless of the lateral object position, so there is no perspective distortion and `scale_y` is constant across the full field width.
 
-The laser projects a line in the scene YZ-plane. The camera observes it from triangulation angle Θ. The table (X axis) moves the object through the laser plane.
+The laser projects a **vertical line** in the scene — parallel to world Y, visible as a vertical stripe on the camera image. The camera observes it from triangulation angle Θ. A change in surface height (Z) shifts the laser stripe **horizontally** (column direction) in the image. The table (X axis) moves the object through the laser plane.
 
-Forward projection (pixel → world):
+Forward projection (pixel → world), defined in the raw camera frame with no frame rotation:
 
 ```
-z_world = (y_ref  − row_px) × scale_z    [mm]
-y_world = (cx     − col_px) × scale_y    [mm]
+z_world = (col_px − x_ref) × scale_z    [mm]
+y_world = (cy     − row_px) × scale_y   [mm]
 x_world = table_x_mm
 ```
 
@@ -142,59 +142,40 @@ where β is the lens magnification and Θ is the triangulation angle. These are 
 
 The hardcoded `theta_rad = 0.436332` (25°) is stored in the saved JSON for documentation only. It is not used in any computation.
 
-### 5.2 Frame rotation — scanner coordinate system
+### 5.2 Camera frame and scanner coordinate system
 
-**Physical camera image (live preview):**
-The camera is mounted so that the laser line runs **vertically** in the raw image (top → bottom, parallel to world Y). A change in surface height ΔZ shifts the laser stripe **horizontally** (left ↔ right) due to the triangulation angle.
+The laser line runs **vertically** in the raw camera image (top → bottom, parallel to world Y). A change in surface height ΔZ shifts the laser stripe **horizontally** (left ↔ right) due to the triangulation angle.
 
-**Scanner frame (what the extractor and triangulator process):**
-Before any processing, `qImageToScannerFrame()` in `ScannerTab.cpp` converts the frame to 8-bit greyscale and rotates it **90° counter-clockwise**:
+`qImageToScannerFrame()` in `ScannerTab.cpp` converts the grabbed QImage to an 8-bit greyscale `scanner::Frame` **without any rotation**. All processing (`LaserLineExtractor`, `Triangulator`) operates directly on the raw camera frame:
 
-```
-Raw camera image (live preview)        90° CCW rotation         Scanner frame (processing)
-                                   ──────────────────────►
-+──────────────→ col               +──────────────→ col         col maps to world Y
-│  (world X, scan direction)       │  (world Y)
-│                                  │
-↓ row (world Y, laser extent)      ↓ row (world Z via Δ shift)  row maps to world Z
+- **Columns** (horizontal axis) encode world Z via the triangulation stripe shift → `z_world = (col_px − x_ref) × scale_z`
+- **Rows** (vertical axis) run along world Y → `y_world = (cy − row_px) × scale_y`
 
-Laser line: vertical  │            Laser line: horizontal  ──
-Z shift:    horizontal ←→          Z shift:    vertical    ↕
-```
-
-After the rotation:
-- **Columns** run along world Y → `y_world = (cx − col_px) × scale_y`
-- **Rows** encode world Z via the triangulation row shift → `z_world = (y_ref − row_px) × scale_z`
-
-All calibration parameters (`y_ref`, `scale_z`, `scale_y`, `cx`) are defined and measured in this rotated **scanner frame**, not in the raw camera image.
-
-**The live preview** always shows the **unrotated** camera image. The rotation is applied only in the scan acquisition path; the live-view path is unaffected.
-
-**Background and long-term outlook:** Due to a communication error during the initial implementation, the laser line extraction logic was written under the assumption that the laser line runs parallel to the X-axis — horizontally left-to-right on screen, yielding one row-peak per image column. When it was later clarified that the laser line actually runs parallel to the Y-axis — vertically top-to-bottom on screen — a 90° CCW rotation was introduced in `qImageToScannerFrame()` as a quick fix so that the existing column-by-column extraction routine could continue to be used without modification. Since the 3D output is now geometrically correct, the routine has been kept as-is. All documentation (formulas, calibration parameters, axis labels) describes the processing logic in the rotated scanner frame; the row/column assignments are only meaningful if the 90° rotation is mentally applied first. A future refactoring should eliminate the rotation by rewriting the extractor to operate directly on vertical laser lines — iterating over rows and returning one column position per row instead of one row position per column.
+All calibration parameters (`x_ref`, `scale_z`, `scale_y`, `cy`) are defined and measured in the raw camera frame.
 
 ### 5.3 Laser line extraction
 
-For each camera column, the extractor finds the sub-pixel row position of the laser line centroid.
+For each camera **row**, the extractor finds the sub-pixel **column** position of the laser line centroid. The result is a `LaserProfile` with `colPositions[row]` for every row; a value of −1.0 means no valid laser in that row.
 
-**Step 1 — find peak row:** scan all rows in the column; record `peakRow` and `peakVal`. If `peakVal ≤ threshold`, skip (no laser in this column).
+**Step 1 — find peak column:** scan all columns in the row; record `peakCol` and `peakVal`. If `peakVal ≤ threshold`, skip (no laser in this row).
 
 **Step 2a — Gaussian 3-point log-interpolation (default, Weber 1995):**
 
 ```
-i0 = pixel(peakRow−1, col),  i1 = pixel(peakRow, col),  i2 = pixel(peakRow+1, col)
+i0 = pixel(row, peakCol−1),  i1 = pixel(row, peakCol),  i2 = pixel(row, peakCol+1)
 denom = log(i0) − 2·log(i1) + log(i2)
-row_subpx = peakRow + 0.5 · (log(i0) − log(i2)) / denom
+col_subpx = peakCol + 0.5 · (log(i0) − log(i2)) / denom
 ```
 
 Valid when `denom < −1e-10` and all three pixels are positive. Achieves approximately 1/20-pixel precision on a well-formed Gaussian laser profile.
 
-**Step 2b — Centre-of-Gravity fallback:** used when Gaussian fails (peak at frame edge, saturated profile, or asymmetric beam). Weighted average of intensity × row, restricted to ±`windowRows` around `peakRow`.
+**Step 2b — Centre-of-Gravity fallback:** used when Gaussian fails (peak at frame edge, saturated profile, or asymmetric beam). Weighted average of intensity × column, restricted to ±`windowCols` around `peakCol`.
 
-**Post-filter — median outlier rejection:** after all columns are processed, the median row position across valid columns is computed. Any column whose position deviates more than `medianRejectRows` pixels from the median is invalidated. This removes hot-pixel hits and specular reflections that survive the threshold but are spatially inconsistent with the laser line.
+**Post-filter — median outlier rejection:** after all rows are processed, the median column position across valid rows is computed. Any row whose column position deviates more than `medianRejectCols` pixels from the median is invalidated. This removes hot-pixel hits and specular reflections that survive the threshold but are spatially inconsistent with the laser line.
 
-`medianRejectRows` is in pixel units. With `scale_z = 0.05 mm/px`, 1 mm of surface height = 20 pixels. Recommended values:
+`medianRejectCols` is in pixel units. With `scale_z = 0.05 mm/px`, 1 mm of surface height corresponds to 20 pixels of column shift. Recommended values:
 
-| Surface | medianRejectRows |
+| Surface | medianRejectCols |
 |---|---|
 | Flat reference (glass, tile) | 10–20 px |
 | Moderate relief (dental crown) | 30–50 px |
@@ -204,48 +185,54 @@ Valid when `denom < −1e-10` and all three pixels are positive. Achieves approx
 
 | Parameter | Unit | Meaning | Calibrated by |
 |---|---|---|---|
-| `y_ref` | px | Camera row where laser appears at Z = 0 | Z wizard |
-| `scale_z` | mm/px | Depth per pixel of row shift | Z wizard |
-| `scale_y` | mm/px | Lateral mm per camera column | Y wizard |
-| `cx` | px | Camera column mapping to world Y = 0 | Y wizard |
+| `x_ref` | px | Camera column where laser appears at Z = 0 | Z wizard |
+| `scale_z` | mm/px | Depth per pixel of column shift | Z wizard |
+| `scale_y` | mm/px | Lateral mm per camera row | Y wizard |
+| `cy` | px | Camera row mapping to world Y = 0 | Y wizard |
 
 ### 5.5 Z calibration wizard
 
-Moves the stage through N steps of size Δz downward (−Z) while a flat diffuse surface sits under the laser. At each step one frame is grabbed and the mean valid laser row is recorded.
+Moves the stage through N steps of size Δz downward (−Z) while a flat diffuse surface sits under the laser. At each step one frame is grabbed and the mean valid laser **column** across all rows is recorded.
 
-Least-squares linear regression on the collected `(z_mm, row_mean)` pairs:
-
-```
-model:    row = a + b·z    where  a = y_ref,  b = 1 / scale_z
-→  scale_z = 1 / b
-   y_ref   = a
-```
-
-**Sign behaviour with negative working coordinates:** with z values such as `{−55, −56, −57}` mm, the regression is sign-agnostic. After CCW rotation and lens inversion, the result is a positive `scale_z` (the laser line moves to **larger** row numbers as Z **increases**). `y_ref` is extrapolated to Z = 0 (the software origin) and will typically be a large positive value outside the normal operating range of the sensor — for example:
+Least-squares linear regression on the collected `(z_mm, col_mean)` pairs:
 
 ```
-y_ref ≈ row_at_working_z − z_working / scale_z
-      ≈ 400 − (−55) / 0.05  =  1500 px
+model:    col = a + b·z    where  a = x_ref,  b = −1 / scale_z
+→  scale_z = −1 / b
+   x_ref   = a
 ```
 
-This is correct and expected. The projection formula gives the surface depth:
+**Sign behaviour:** the regression slope `b` is negative. As the stage Z decreases (stage moves down, surface moves away from camera), the laser column increases (stripe shifts right in the image), so `b = Δcol / Δz < 0`. `scale_z = −1/b` is therefore positive. A non-positive `scale_z` is rejected as invalid by the wizard.
+
+**Sign check:** `scale_z > 0` and `col > x_ref` → `z_world > 0` (surface above reference) ✓
+
+**Working-range extrapolation:** `x_ref` is extrapolated to the software origin Z = 0 (the null-switch vicinity), far from the actual working range. With typical working z values such as `{−55, −56, −57}` mm and b ≈ −20 px/mm, `x_ref` will lie well outside the physical sensor column range:
 
 ```
-z_world = (1500 − 400) × 0.05 = 55 mm  ✓
+x_ref = col_at_working_z − b × z_working
+      ≈ 640 − (−20) × (−55)  =  640 − 1100  =  −460 px
 ```
 
-Note: `z_world` is in the triangulation coordinate system where depth increases away from the objective. Its magnitude equals the distance of the surface from the software origin; its sign is **opposite** to the stage z convention (stage working positions are negative, `z_world` is positive). For relative surface height — the quantity relevant to scanning — this has no effect: height differences between scan points are always correct.
+This is correct and expected. The projection formula recovers the correct depth:
 
-`scale_z` is fit directly from the regression slope and is accurate. `y_ref` uncertainty grows with extrapolation distance to Z = 0, but since scans measure relative surface height (not absolute Z from the null switch), this does not affect scan quality.
+```
+z_world = (640 − (−460)) × 0.05 = 55 mm  ✓
+```
+
+For relative surface height — the quantity relevant to scanning — only the column difference matters, so the absolute value of `x_ref` does not affect scan quality.
+
+`scale_z` is fit directly from the regression slope and is accurate regardless of extrapolation distance.
 
 ### 5.6 Y calibration wizard
 
-One frame is grabbed with a reference object of known physical width W straddling the optical axis. The wizard detects the two edge columns from the steepest gradients in the laser profile row positions, then:
+One frame is grabbed with a reference object of known physical width W straddling the optical axis. Because the laser line is vertical (parallel to world Y), the object's width in Y maps to the **row** extent in the camera image. The wizard detects the two edge **rows** from the steepest gradients in the laser profile's column positions (`colPositions`), then:
 
 ```
-scale_y = W / (col_right − col_left)   [mm/px]
-cx      = (col_left + col_right) / 2   [px]
+scale_y = W / (bottomRow − topRow)   [mm/px]
+cy      = (topRow + bottomRow) / 2   [px]
 ```
+
+Edge detection: a 5-row sliding window scans `colPositions` for the largest positive and negative gradient in column position. A transition requires at least a 5-pixel column step to be counted as a valid edge.
 
 Suitable calibration objects: gauge blocks, precision-ground slots, calibration bars with parallel edges at a certified distance.
 
@@ -254,7 +241,7 @@ Suitable calibration objects: gauge blocks, precision-ground slots, calibration 
 The acquisition thread is stopped for the duration of a scan. The GUI receives `movementFinished()` from the stage thread; the scan slot `onStepReady()` then:
 
 1. Calls `grabFreshFrame()` — flushes any buffered V4L2 frames (stale from before the move), then grabs one fresh frame with a 2 s timeout
-2. Converts to 8-bit greyscale and rotates 90° CCW into the scanner coordinate frame (`qImageToScannerFrame()` — see §5.2)
+2. Converts to 8-bit greyscale (`qImageToScannerFrame()`) — the raw frame is passed directly to the extractor; no rotation is applied
 3. Runs `extractLaserProfile()` with current threshold and scatter settings
 4. Calls `projectTo3D()` to accumulate 3D points
 5. Emits `previewFrameReady(img)` so the CameraView shows the grabbed frame at each step
@@ -274,7 +261,7 @@ Camera exposure for scanning is set independently of the live-view exposure (Sca
 
 ### 6.1 Current model — double-telecentric, no perspective
 
-The calibration model described above (Weber 1995, four-parameter: `y_ref`, `scale_z`, `scale_y`, `cx`) is valid **only for double-telecentric optics**. It assumes:
+The calibration model described above (Weber 1995, four-parameter: `x_ref`, `scale_z`, `scale_y`, `cy`) is valid **only for double-telecentric optics**. It assumes:
 
 - Constant magnification β across the entire field of view
 - No radial or tangential lens distortion
@@ -314,7 +301,7 @@ After undistortion, the 3D projection requires replacing the simple linear formu
 Y_world = (col_px − cx) / fx × Z_world   [mm, from perspective geometry]
 ```
 
-where `fx` is the focal length in pixels and `Z_world` comes from the laser triangulation row shift as before. This requires knowing Z first to recover Y — the decoupled calibration of the current model no longer applies, and a joint intrinsic + extrinsic calibration of the camera-laser system is needed.
+where `fx` is the focal length in pixels and `Z_world` comes from the laser triangulation column shift as before. This requires knowing Z first to recover Y — the decoupled calibration of the current model no longer applies, and a joint intrinsic + extrinsic calibration of the camera-laser system is needed.
 
 A practical approach for a macro-lens setup:
 
@@ -351,7 +338,7 @@ src/
 ├── scanner/
 │   ├── interfaces/ICamera.h    — Internal scanner Frame struct (uint8_t[], width, height)
 │   ├── processing/
-│   │   ├── LaserLineExtractor  — extractLaserProfile(): Gaussian + CoG sub-pixel extraction, median filter
+│   │   ├── LaserLineExtractor  — extractLaserProfile(): per-row Gaussian + CoG sub-pixel column extraction, median filter
 │   │   └── Triangulator        — projectTo3D(), calibrateFromZPoints(), calibrateFromYEdges()
 │   └── export/
 │       └── PlyWriter           — Binary little-endian PLY export (float32 xyz)
