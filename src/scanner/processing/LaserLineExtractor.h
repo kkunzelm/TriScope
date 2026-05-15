@@ -7,13 +7,13 @@
 
 namespace scanner {
 
-// Per-frame result: one subpixel row coordinate per camera column.
-// A value of -1.0 means no valid laser reflection was found in that column.
+// Per-frame result: one subpixel column coordinate per camera row.
+// A value of -1.0 means no valid laser reflection was found in that row.
 struct LaserProfile {
-    std::vector<double> rowPositions;  // index = camera column
+    std::vector<double> colPositions;  // index = camera row
     int frameWidth{0};
     int frameHeight{0};
-    int validColumns{0};               // columns where rowPosition >= 0
+    int validRows{0};                  // rows where colPosition >= 0
 };
 
 enum class PeakMethod {
@@ -22,13 +22,15 @@ enum class PeakMethod {
 };
 
 struct ExtractorParams {
-    uint8_t    threshold{50};                // minimum pixel value to consider as laser (0–255)
-    int        windowRows{5};               // CoG fallback: restrict to ±windowRows around peak (0 = full column)
-    PeakMethod method{PeakMethod::Gaussian}; // subpixel interpolation method
-    double     medianRejectRows{50.0};       // post-filter: invalidate columns deviating more than this from the median (0 = disabled)
+    uint8_t    threshold{50};                 // minimum pixel value to consider as laser (0–255)
+    int        windowCols{5};                 // CoG fallback: restrict to ±windowCols around peak (0 = full row)
+    PeakMethod method{PeakMethod::Gaussian};  // subpixel interpolation method
+    double     medianRejectCols{50.0};        // post-filter: invalidate rows deviating more than this from the median (0 = disabled)
 };
 
-// Extract the laser line position (subpixel) from a 16-bit monochrome frame.
+// Extract the laser line position (subpixel) from an 8-bit monochrome frame.
+// The laser line is assumed to run vertically in the image (parallel to world Y).
+// Returns one column position per row; -1.0 means no valid laser in that row.
 LaserProfile extractLaserProfile(const Frame& frame, const ExtractorParams& params = {});
 
 // Variant accepting a raw span (useful for unit tests without a full Frame object).

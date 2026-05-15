@@ -47,7 +47,7 @@ signals:
     void previewFrameReady(const QImage &img);
 
     // Emitted alongside previewFrameReady with the extracted laser line positions
-    // in original (unrotated) image-pixel coordinates.
+    // in raw camera image-pixel coordinates (col, row).
     // gauss = Gaussian interpolation, cog = Center of Gravity.
     void laserOverlayReady(QVector<QPointF> gauss, QVector<QPointF> cog);
 
@@ -75,7 +75,7 @@ private:
     scanner::CalibParams currentCalib() const;
 
     // Helpers for calibration
-    static double meanValidRow(const scanner::LaserProfile &profile);
+    static double meanValidCol(const scanner::LaserProfile &profile);
     static std::pair<double,double> detectEdges(const scanner::LaserProfile &profile);
 
     // ── UI ──────────────────────────────────────────────────────────────────
@@ -96,10 +96,10 @@ private:
     QDoubleSpinBox *m_scatterSpin   = nullptr;
     QLabel         *m_outputLabel    = nullptr;
     QComboBox      *m_plyFormatCombo = nullptr;
-    QDoubleSpinBox *m_yRefSpin    = nullptr;
+    QDoubleSpinBox *m_xRefSpin    = nullptr;
     QDoubleSpinBox *m_scaleZSpin  = nullptr;
     QDoubleSpinBox *m_scaleYSpin  = nullptr;
-    QDoubleSpinBox *m_cxSpin      = nullptr;
+    QDoubleSpinBox *m_cySpin      = nullptr;
     QProgressBar   *m_progress          = nullptr;
     QLabel         *m_statusLabel       = nullptr;   // scan status (Scanner tab)
     QLabel         *m_calibStatusLabel  = nullptr;   // calib status (Calibrate tab)

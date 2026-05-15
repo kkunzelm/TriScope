@@ -20,29 +20,29 @@ LaserProfile extractLaserProfile(std::span<const uint8_t> data,
     LaserProfile result;
     result.frameWidth  = width;
     result.frameHeight = height;
-    result.rowPositions.assign(static_cast<std::size_t>(width), -1.0);
+    result.colPositions.assign(static_cast<std::size_t>(height), -1.0);
 
-    for (int col = 0; col < width; ++col) {
-        // Step 1: find peak row across entire column
+    for (int row = 0; row < height; ++row) {
+        // Step 1: find peak column across entire row
         uint8_t peakVal = 0;
-        int     peakRow = 0;
-        for (int row = 0; row < height; ++row) {
+        int     peakCol = 0;
+        for (int col = 0; col < width; ++col) {
             const uint8_t v = data[static_cast<std::size_t>(row * width + col)];
-            if (v > peakVal) { peakVal = v; peakRow = row; }
+            if (v > peakVal) { peakVal = v; peakCol = col; }
         }
         if (peakVal <= params.threshold) continue;
 
         // Step 2a: Gaussian 3-point log-interpolation (Weber 1995, Eq. 4)
         // Works on the 3 pixels centred on the peak; falls through to CoG on failure.
         if (params.method == PeakMethod::Gaussian &&
-            peakRow > 0 && peakRow < height - 1)
+            peakCol > 0 && peakCol < width - 1)
         {
             const double i0 = static_cast<double>(
-                data[static_cast<std::size_t>((peakRow - 1) * width + col)]);
+                data[static_cast<std::size_t>(row * width + peakCol - 1)]);
             const double i1 = static_cast<double>(
-                data[static_cast<std::size_t>( peakRow      * width + col)]);
+                data[static_cast<std::size_t>(row * width + peakCol)]);
             const double i2 = static_cast<double>(
-                data[static_cast<std::size_t>((peakRow + 1) * width + col)]);
+                data[static_cast<std::size_t>(row * width + peakCol + 1)]);
 
             if (i0 > 0.0 && i2 > 0.0) {
                 const double li0 = std::log(i0);
@@ -50,45 +50,44 @@ LaserProfile extractLaserProfile(std::span<const uint8_t> data,
                 const double li2 = std::log(i2);
                 const double denom = li0 - 2.0 * li1 + li2;
                 if (denom < -1e-10) {
-                    result.rowPositions[static_cast<std::size_t>(col)] =
-                        peakRow + 0.5 * (li0 - li2) / denom;
-                    ++result.validColumns;
+                    result.colPositions[static_cast<std::size_t>(row)] =
+                        peakCol + 0.5 * (li0 - li2) / denom;
+                    ++result.validRows;
                     continue;
                 }
             }
         }
 
         // Step 2b: Center-of-Gravity (fallback, or explicit CoG method)
-        const int rowMin = (params.windowRows > 0)
-                         ? std::max(0, peakRow - params.windowRows) : 0;
-        const int rowMax = (params.windowRows > 0)
-                         ? std::min(height, peakRow + params.windowRows + 1) : height;
+        const int colMin = (params.windowCols > 0)
+                         ? std::max(0, peakCol - params.windowCols) : 0;
+        const int colMax = (params.windowCols > 0)
+                         ? std::min(width, peakCol + params.windowCols + 1) : width;
 
-        double sumW = 0.0, sumWY = 0.0;
-        for (int row = rowMin; row < rowMax; ++row) {
+        double sumW = 0.0, sumWX = 0.0;
+        for (int col = colMin; col < colMax; ++col) {
             const double v = static_cast<double>(
                 data[static_cast<std::size_t>(row * width + col)]);
             if (v > static_cast<double>(params.threshold)) {
                 sumW  += v;
-                sumWY += v * row;
+                sumWX += v * col;
             }
         }
         if (sumW > 0.0) {
-            result.rowPositions[static_cast<std::size_t>(col)] = sumWY / sumW;
-            ++result.validColumns;
+            result.colPositions[static_cast<std::size_t>(row)] = sumWX / sumW;
+            ++result.validRows;
         }
     }
 
-    // Post-extraction median filter: collect valid row positions, find the
-    // median, then invalidate any column that deviates more than
-    // medianRejectRows from it.  This removes isolated hot-pixel hits and
-    // ambient-light reflections that survive the threshold but are far from
-    // the main laser stripe.
-    if (params.medianRejectRows > 0.0 && result.validColumns >= 2) {
+    // Post-extraction median filter: collect valid col positions, find the
+    // median, then invalidate any row that deviates more than medianRejectCols
+    // from it.  This removes isolated hot-pixel hits and ambient-light
+    // reflections that survive the threshold but are far from the main laser stripe.
+    if (params.medianRejectCols > 0.0 && result.validRows >= 2) {
         std::vector<double> valid;
-        valid.reserve(static_cast<std::size_t>(result.validColumns));
-        for (double r : result.rowPositions)
-            if (r >= 0.0) valid.push_back(r);
+        valid.reserve(static_cast<std::size_t>(result.validRows));
+        for (double c : result.colPositions)
+            if (c >= 0.0) valid.push_back(c);
 
         std::sort(valid.begin(), valid.end());
         const std::size_t mid = valid.size() / 2;
@@ -96,13 +95,13 @@ LaserProfile extractLaserProfile(std::span<const uint8_t> data,
                             ? valid[mid]
                             : (valid[mid - 1] + valid[mid]) * 0.5;
 
-        result.validColumns = 0;
-        for (double &r : result.rowPositions) {
-            if (r >= 0.0) {
-                if (std::abs(r - median) > params.medianRejectRows)
-                    r = -1.0;
+        result.validRows = 0;
+        for (double &c : result.colPositions) {
+            if (c >= 0.0) {
+                if (std::abs(c - median) > params.medianRejectCols)
+                    c = -1.0;
                 else
-                    ++result.validColumns;
+                    ++result.validRows;
             }
         }
     }

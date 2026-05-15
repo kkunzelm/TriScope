@@ -55,24 +55,11 @@ static std::optional<QImage> grabFreshFrame(ICameraDevice *camera, int timeoutMs
 
 static scanner::Frame qImageToScannerFrame(const QImage &img)
 {
+    // Convert to 8-bit greyscale only — no rotation.
+    // The laser line runs vertically in the raw camera image (parallel to world Y);
+    // the extractor now works directly on vertical lines (one col position per row).
     scanner::Frame frame;
-    // The camera is mounted with the laser line running vertically
-    // (top→bottom maps to the Y axis) and the Z-displacement shifting it
-    // horizontally (left↔right).  We need to rotate 90° CCW so that after
-    // the transform the laser stripe is horizontal: image columns → Y,
-    // image rows → Z.  This makes the LaserLineExtractor find a per-row
-    // peak rather than a per-column one.
-    //
-    // QTransform::rotate() uses a left-handed (screen) convention:
-    //   positive angle → clockwise (CW)
-    //   negative angle → counter-clockwise (CCW)
-    // So rotate(-90) gives the required 90° CCW rotation.
-    // (The previous rotate(+90) was CW and produced a mirrored point cloud.)
-    //
-    // The camera live-preview path does NOT use this function; only the
-    // scanner acquisition loop calls qImageToScannerFrame().
-    QImage gray = img.convertToFormat(QImage::Format_Grayscale8)
-                     .transformed(QTransform().rotate(-90));
+    const QImage gray = img.convertToFormat(QImage::Format_Grayscale8);
     frame.width  = gray.width();
     frame.height = gray.height();
     frame.data.resize(static_cast<std::size_t>(gray.width() * gray.height()));
@@ -85,22 +72,17 @@ static scanner::Frame qImageToScannerFrame(const QImage &img)
     return frame;
 }
 
-// Converts a LaserProfile (computed in the 90° CCW-rotated scanner frame) back
-// to QPointF coordinates in the original unrotated camera image.
-//
-// Rotation used in qImageToScannerFrame: rotate(-90) → 90° CCW (screen coords).
-// Forward:  (x_orig, y_orig) → (y_orig,  W_orig-1 - x_orig)  [new size: H_orig × W_orig]
-// Inverse:  (col,    row)    → (W_orig-1 - row, col)
-//         = (frameHeight-1 - rowPositions[col], col)
+// Map a LaserProfile to QPointF image coordinates.
+// The profile is in raw camera coordinates: colPositions[row] gives the
+// sub-pixel column where the laser peak is in that row.
 static QVector<QPointF> profileToImagePoints(const scanner::LaserProfile &profile)
 {
     QVector<QPointF> pts;
-    pts.reserve(profile.validColumns);
-    const double fhm1 = static_cast<double>(profile.frameHeight - 1);
-    for (int col = 0; col < profile.frameWidth; ++col) {
-        const double row = profile.rowPositions[static_cast<std::size_t>(col)];
-        if (row < 0.0) continue;
-        pts.append(QPointF(fhm1 - row, static_cast<double>(col)));
+    pts.reserve(profile.validRows);
+    for (int row = 0; row < profile.frameHeight; ++row) {
+        const double col = profile.colPositions[static_cast<std::size_t>(row)];
+        if (col < 0.0) continue;
+        pts.append(QPointF(col, static_cast<double>(row)));
     }
     return pts;
 }
@@ -376,15 +358,15 @@ void ScannerTab::buildUI()
     auto *calibLayout = new QVBoxLayout(calibGroup);
     auto *calibForm  = new QFormLayout;
 
-    m_yRefSpin   = new QDoubleSpinBox; m_yRefSpin->setRange(0, 9999);   m_yRefSpin->setDecimals(2); m_yRefSpin->setValue(512.0);
+    m_xRefSpin   = new QDoubleSpinBox; m_xRefSpin->setRange(0, 9999);   m_xRefSpin->setDecimals(2); m_xRefSpin->setValue(640.0);
     m_scaleZSpin = new QDoubleSpinBox; m_scaleZSpin->setRange(0.0001, 10); m_scaleZSpin->setDecimals(5); m_scaleZSpin->setValue(0.05000);
     m_scaleYSpin = new QDoubleSpinBox; m_scaleYSpin->setRange(0.0001, 10); m_scaleYSpin->setDecimals(5); m_scaleYSpin->setValue(0.01700);
-    m_cxSpin     = new QDoubleSpinBox; m_cxSpin->setRange(0, 9999);     m_cxSpin->setDecimals(2);   m_cxSpin->setValue(640.0);
+    m_cySpin     = new QDoubleSpinBox; m_cySpin->setRange(0, 9999);     m_cySpin->setDecimals(2);   m_cySpin->setValue(512.0);
 
-    calibForm->addRow(tr("y_ref (px):"),   m_yRefSpin);
+    calibForm->addRow(tr("x_ref (px):"),      m_xRefSpin);
     calibForm->addRow(tr("scale_z (mm/px):"), m_scaleZSpin);
     calibForm->addRow(tr("scale_y (mm/px):"), m_scaleYSpin);
-    calibForm->addRow(tr("cx (px):"),      m_cxSpin);
+    calibForm->addRow(tr("cy (px):"),         m_cySpin);
     calibLayout->addLayout(calibForm);
 
     auto *runCalibRow = new QHBoxLayout;
@@ -585,9 +567,9 @@ void ScannerTab::onStepReady(const QString &)
         const scanner::Frame frame = qImageToScannerFrame(maybe.value());
         scanner::ExtractorParams ep;
         ep.threshold        = static_cast<uint8_t>(m_threshSpin->value());
-        ep.medianRejectRows = m_scatterSpin->value();
-        const double row = meanValidRow(scanner::extractLaserProfile(frame, ep));
-        if (row < 0.0) {
+        ep.medianRejectCols = m_scatterSpin->value();
+        const double col = meanValidCol(scanner::extractLaserProfile(frame, ep));
+        if (col < 0.0) {
             QMessageBox::warning(this, tr("Calibrate Z"),
                 tr("No laser line at step %1 — aborting.").arg(m_calibZCurrentStep));
             finishCalibZ(false);
@@ -595,7 +577,7 @@ void ScannerTab::onStepReady(const QString &)
         }
         // Each step moves −Z, so actual Z decreases by calibZDeltaMm per step.
         const double z = m_calibZStartZ - m_calibZCurrentStep * m_calibZDeltaMm;
-        m_calibZPoints.push_back({z, row});
+        m_calibZPoints.push_back({z, col});
         m_calibZCurrentStep++;
 
         if (m_calibZCurrentStep >= m_calibZTotalSteps) {
@@ -633,7 +615,7 @@ void ScannerTab::onStepReady(const QString &)
     const scanner::Frame frame = qImageToScannerFrame(img);
     scanner::ExtractorParams extParams;
     extParams.threshold        = static_cast<uint8_t>(m_threshSpin->value());
-    extParams.medianRejectRows = m_scatterSpin->value();
+    extParams.medianRejectCols = m_scatterSpin->value();
     const scanner::LaserProfile profile = scanner::extractLaserProfile(frame, extParams);
 
     // Extract CoG independently for the quality overlay (Gaussian is already above).
@@ -722,10 +704,10 @@ void ScannerTab::onSetEndX()
 
 void ScannerTab::applyCalibJson(const QJsonObject &obj)
 {
-    m_yRefSpin->setValue(  obj.value("y_ref")  .toDouble(m_yRefSpin->value()));
+    m_xRefSpin->setValue(  obj.value("x_ref")  .toDouble(m_xRefSpin->value()));
     m_scaleZSpin->setValue(obj.value("scale_z").toDouble(m_scaleZSpin->value()));
     m_scaleYSpin->setValue(obj.value("scale_y").toDouble(m_scaleYSpin->value()));
-    m_cxSpin->setValue(    obj.value("cx")     .toDouble(m_cxSpin->value()));
+    m_cySpin->setValue(    obj.value("cy")     .toDouble(m_cySpin->value()));
 }
 
 void ScannerTab::onLoadCalib()
@@ -751,10 +733,10 @@ void ScannerTab::onSaveCalib()
 
     QJsonObject obj;
     obj["theta_rad"] = 0.436332;
-    obj["y_ref"]   = m_yRefSpin->value();
+    obj["x_ref"]   = m_xRefSpin->value();
     obj["scale_z"] = m_scaleZSpin->value();
     obj["scale_y"] = m_scaleYSpin->value();
-    obj["cx"]      = m_cxSpin->value();
+    obj["cy"]      = m_cySpin->value();
 
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly))
@@ -853,43 +835,43 @@ void ScannerTab::onPositionChanged(double x, double y, double z)
 // Calibration helpers
 // ---------------------------------------------------------------------------
 
-double ScannerTab::meanValidRow(const scanner::LaserProfile &profile)
+double ScannerTab::meanValidCol(const scanner::LaserProfile &profile)
 {
     double sum = 0.0;
     int    n   = 0;
-    for (double r : profile.rowPositions)
-        if (r >= 0.0) { sum += r; ++n; }
+    for (double c : profile.colPositions)
+        if (c >= 0.0) { sum += c; ++n; }
     return n > 0 ? sum / n : -1.0;
 }
 
 std::pair<double,double> ScannerTab::detectEdges(const scanner::LaserProfile &profile)
 {
-    const auto &rows = profile.rowPositions;
-    const int   sz   = static_cast<int>(rows.size());
+    const auto &cols = profile.colPositions;
+    const int   sz   = static_cast<int>(cols.size());
     if (sz < 4) return {-1.0, -1.0};
 
     double minGrad = 0.0, maxGrad = 0.0;
-    int leftIdx = -1, rightIdx = -1;
+    int topIdx = -1, bottomIdx = -1;
 
-    // 5-column window: bridges gradual transitions (laser beam width) and
+    // 5-row window: bridges gradual transitions (laser beam width) and
     // small invalid gaps (geometric shadow at the object edge).
     const int kWin = 5;
-    for (int c = 0; c + kWin < sz; ++c) {
-        const double r0 = rows[static_cast<std::size_t>(c)];
-        const double r1 = rows[static_cast<std::size_t>(c + kWin)];
-        if (r0 < 0.0 || r1 < 0.0) continue;
-        const double g = r1 - r0;
-        if (g < minGrad) { minGrad = g; leftIdx  = c + kWin / 2; }
-        if (g > maxGrad) { maxGrad = g; rightIdx = c + kWin / 2; }
+    for (int r = 0; r + kWin < sz; ++r) {
+        const double c0 = cols[static_cast<std::size_t>(r)];
+        const double c1 = cols[static_cast<std::size_t>(r + kWin)];
+        if (c0 < 0.0 || c1 < 0.0) continue;
+        const double g = c1 - c0;
+        if (g < minGrad) { minGrad = g; topIdx    = r + kWin / 2; }
+        if (g > maxGrad) { maxGrad = g; bottomIdx = r + kWin / 2; }
     }
 
     // Require at least a 5-pixel step across the window to count as an edge
-    if (leftIdx < 0 || rightIdx < 0 || -minGrad < 5.0 || maxGrad < 5.0)
+    if (topIdx < 0 || bottomIdx < 0 || -minGrad < 5.0 || maxGrad < 5.0)
         return {-1.0, -1.0};
 
     // Return lo < hi regardless of which gradient direction ended up on which side
-    const double lo = std::min(leftIdx, rightIdx) + 0.5;
-    const double hi = std::max(leftIdx, rightIdx) + 0.5;
+    const double lo = std::min(topIdx, bottomIdx) + 0.5;
+    const double hi = std::max(topIdx, bottomIdx) + 0.5;
     return {lo, hi};
 }
 
@@ -958,14 +940,14 @@ void ScannerTab::onCalibrateZ()
     const scanner::Frame frame0 = qImageToScannerFrame(maybe.value());
     scanner::ExtractorParams ep;
     ep.threshold        = static_cast<uint8_t>(m_threshSpin->value());
-    ep.medianRejectRows = m_scatterSpin->value();
-    const double row0 = meanValidRow(scanner::extractLaserProfile(frame0, ep));
-    if (row0 < 0.0) {
+    ep.medianRejectCols = m_scatterSpin->value();
+    const double col0 = meanValidCol(scanner::extractLaserProfile(frame0, ep));
+    if (col0 < 0.0) {
         QMessageBox::warning(this, tr("Calibrate Z"), tr("No laser line found — check threshold."));
         finishCalibZ(false);
         return;
     }
-    m_calibZPoints.push_back({m_calibZStartZ, row0});
+    m_calibZPoints.push_back({m_calibZStartZ, col0});
     m_calibZCurrentStep = 1;
 
     if (m_calibZCurrentStep >= m_calibZTotalSteps) { finishCalibZ(true); return; }
@@ -1011,12 +993,12 @@ void ScannerTab::finishCalibZ(bool success)
         return;
     }
 
-    m_yRefSpin->setValue(calib.y_ref);
+    m_xRefSpin->setValue(calib.x_ref);
     m_scaleZSpin->setValue(calib.scale_z);
 
     m_calibStatusLabel->setText(
-        tr("Z-calib done (%3 points):\ny_ref = %1 px\nscale_z = %2 mm/px")
-            .arg(calib.y_ref,   0, 'f', 1)
+        tr("Z-calib done (%3 points):\nx_ref = %1 px\nscale_z = %2 mm/px")
+            .arg(calib.x_ref,   0, 'f', 1)
             .arg(calib.scale_z, 0, 'f', 5)
             .arg(m_calibZPoints.size()));
 }
@@ -1056,59 +1038,59 @@ void ScannerTab::onCalibrateY()
     const scanner::Frame frame = qImageToScannerFrame(maybe.value());
     scanner::ExtractorParams ep;
     ep.threshold        = static_cast<uint8_t>(m_threshSpin->value());
-    ep.medianRejectRows = 0.0;  // must be disabled: the object step IS the outlier we need
+    ep.medianRejectCols = 0.0;  // must be disabled: the object step IS the outlier we need
     const auto profile = scanner::extractLaserProfile(frame, ep);
 
-    const auto [leftCol, rightCol] = detectEdges(profile);
-    if (leftCol < 0.0 || rightCol < 0.0) {
+    const auto [topRow, bottomRow] = detectEdges(profile);
+    if (topRow < 0.0 || bottomRow < 0.0) {
         // Compute diagnostics to help the user understand the failure
         int    validCount   = 0;
-        double rowMin       = 1e9, rowMax = -1e9, maxAdjGrad = 0.0;
-        for (int c = 0; c < profile.frameWidth; ++c) {
-            const double r = profile.rowPositions[static_cast<std::size_t>(c)];
-            if (r >= 0.0) {
+        double colMin       = 1e9, colMax = -1e9, maxAdjGrad = 0.0;
+        for (int r = 0; r < profile.frameHeight; ++r) {
+            const double c = profile.colPositions[static_cast<std::size_t>(r)];
+            if (c >= 0.0) {
                 ++validCount;
-                if (r < rowMin) rowMin = r;
-                if (r > rowMax) rowMax = r;
-                if (c > 0) {
-                    const double prev = profile.rowPositions[static_cast<std::size_t>(c - 1)];
+                if (c < colMin) colMin = c;
+                if (c > colMax) colMax = c;
+                if (r > 0) {
+                    const double prev = profile.colPositions[static_cast<std::size_t>(r - 1)];
                     if (prev >= 0.0)
-                        maxAdjGrad = std::max(maxAdjGrad, std::abs(r - prev));
+                        maxAdjGrad = std::max(maxAdjGrad, std::abs(c - prev));
                 }
             }
         }
         QMessageBox::warning(this, tr("Calibrate Y"),
             tr("Could not detect two edges.\n"
-               "Valid columns: %1 / %2\n"
-               "Row range: %3 – %4 px  (step = %5 px)\n"
+               "Valid rows: %1 / %2\n"
+               "Col range: %3 – %4 px  (step = %5 px)\n"
                "Max adjacent gradient: %6 px\n\n"
-               "Both edges must be visible with background above and below.")
-                .arg(validCount).arg(profile.frameWidth)
-                .arg(rowMin < 1e8 ? rowMin : 0.0, 0, 'f', 0)
-                .arg(rowMax > -1e8 ? rowMax : 0.0, 0, 'f', 0)
-                .arg(rowMax > -1e8 ? rowMax - rowMin : 0.0, 0, 'f', 0)
+               "Both edges must be visible with background left and right.")
+                .arg(validCount).arg(profile.frameHeight)
+                .arg(colMin < 1e8 ? colMin : 0.0, 0, 'f', 0)
+                .arg(colMax > -1e8 ? colMax : 0.0, 0, 'f', 0)
+                .arg(colMax > -1e8 ? colMax - colMin : 0.0, 0, 'f', 0)
                 .arg(maxAdjGrad, 0, 'f', 1));
         return;
     }
 
-    const auto calib = scanner::calibrateFromYEdges(leftCol, rightCol, width, currentCalib());
+    const auto calib = scanner::calibrateFromYEdges(topRow, bottomRow, width, currentCalib());
     m_scaleYSpin->setValue(calib.scale_y);
-    m_cxSpin->setValue(calib.cx);
+    m_cySpin->setValue(calib.cy);
 
     m_calibStatusLabel->setText(
-        tr("Y-calib done: scale_y = %1 mm/px,  cx = %2 px  (edges at col %3 / %4)")
+        tr("Y-calib done: scale_y = %1 mm/px,  cy = %2 px  (edges at row %3 / %4)")
             .arg(calib.scale_y, 0, 'f', 5)
-            .arg(calib.cx,      0, 'f', 1)
-            .arg(leftCol,       0, 'f', 1)
-            .arg(rightCol,      0, 'f', 1));
+            .arg(calib.cy,      0, 'f', 1)
+            .arg(topRow,        0, 'f', 1)
+            .arg(bottomRow,     0, 'f', 1));
 }
 
 scanner::CalibParams ScannerTab::currentCalib() const
 {
     scanner::CalibParams c;
-    c.y_ref   = m_yRefSpin->value();
+    c.x_ref   = m_xRefSpin->value();
     c.scale_z = m_scaleZSpin->value();
     c.scale_y = m_scaleYSpin->value();
-    c.cx      = m_cxSpin->value();
+    c.cy      = m_cySpin->value();
     return c;
 }

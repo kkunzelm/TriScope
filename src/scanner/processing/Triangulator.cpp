@@ -13,15 +13,15 @@ PointCloud projectTo3D(const LaserProfile& profile,
                        const CalibParams& params)
 {
     PointCloud cloud;
-    cloud.reserve(static_cast<std::size_t>(profile.validColumns));
+    cloud.reserve(static_cast<std::size_t>(profile.validRows));
 
-    const int w = profile.frameWidth;
-    for (int col = 0; col < w; ++col) {
-        const double yPx = profile.rowPositions[static_cast<std::size_t>(col)];
-        if (yPx < 0.0) continue;
+    const int h = profile.frameHeight;
+    for (int row = 0; row < h; ++row) {
+        const double xPx = profile.colPositions[static_cast<std::size_t>(row)];
+        if (xPx < 0.0) continue;
 
-        const double z = (params.y_ref - yPx) * params.scale_z;
-        const double y = (params.cx - static_cast<double>(col)) * params.scale_y;
+        const double z = (params.x_ref - xPx)                  * params.scale_z;
+        const double y = (params.cy    - static_cast<double>(row)) * params.scale_y;
 
         cloud.emplace_back(xTableMm, y, z);
     }
@@ -36,40 +36,40 @@ CalibParams calibrateFromZPoints(std::span<const ZCalibPoint> points,
     const int n = static_cast<int>(points.size());
     if (n < 2) return params;
 
-    // Least-squares linear fit: row = a + b * z
-    // where  a = y_ref,  b = 1 / scale_z
-    double sum_z  = 0.0, sum_r  = 0.0;
-    double sum_z2 = 0.0, sum_zr = 0.0;
+    // Least-squares linear fit: col = a + b * z
+    // where  a = x_ref,  b = 1 / scale_z
+    double sum_z  = 0.0, sum_c  = 0.0;
+    double sum_z2 = 0.0, sum_zc = 0.0;
     for (const auto& p : points) {
         sum_z  += p.zMm;
-        sum_r  += p.rowMean;
+        sum_c  += p.colMean;
         sum_z2 += p.zMm * p.zMm;
-        sum_zr += p.zMm * p.rowMean;
+        sum_zc += p.zMm * p.colMean;
     }
 
     const double denom = static_cast<double>(n) * sum_z2 - sum_z * sum_z;
     if (std::abs(denom) < 1e-12) return params;
 
-    const double b = (static_cast<double>(n) * sum_zr - sum_z * sum_r) / denom;
-    const double a = (sum_r - b * sum_z) / static_cast<double>(n);
+    const double b = (static_cast<double>(n) * sum_zc - sum_z * sum_c) / denom;
+    const double a = (sum_c - b * sum_z) / static_cast<double>(n);
 
     if (std::abs(b) < 1e-12) return params;
 
-    params.y_ref   = a;
-    params.scale_z = 1.0 / b;   // positive: row increases as z increases (CCW rotation)
+    params.x_ref   = a;
+    params.scale_z = 1.0 / b;
     return params;
 }
 
 // ── Y calibration ─────────────────────────────────────────────────────────────
 
-CalibParams calibrateFromYEdges(double leftCol, double rightCol,
+CalibParams calibrateFromYEdges(double topRow, double bottomRow,
                                  double knownWidthMm,
                                  CalibParams params)
 {
-    const double deltaCols = rightCol - leftCol;
-    if (deltaCols < 1.0) return params;          // degenerate: edges too close
-    params.scale_y = knownWidthMm / deltaCols;
-    params.cx      = (leftCol + rightCol) * 0.5;
+    const double deltaRows = bottomRow - topRow;
+    if (deltaRows < 1.0) return params;          // degenerate: edges too close
+    params.scale_y = knownWidthMm / deltaRows;
+    params.cy      = (topRow + bottomRow) * 0.5;
     return params;
 }
 
@@ -82,28 +82,28 @@ double evalTheta(double theta, const CalibScan& scan, CalibParams& params)
     const double tanTheta = std::tan(theta);
     if (std::abs(tanTheta) < 1e-9) return std::numeric_limits<double>::max();
 
-    std::vector<double> yPxAll;
+    std::vector<double> xPxAll;
     const double knownZ = scan.knownHeightMm;
 
     for (const auto& prof : scan.profiles) {
-        for (int col = 0; col < prof.frameWidth; ++col) {
-            const double yPx = prof.rowPositions[static_cast<std::size_t>(col)];
-            if (yPx >= 0.0)
-                yPxAll.push_back(yPx);
+        for (int row = 0; row < prof.frameHeight; ++row) {
+            const double xPx = prof.colPositions[static_cast<std::size_t>(row)];
+            if (xPx >= 0.0)
+                xPxAll.push_back(xPx);
         }
     }
-    if (yPxAll.empty()) return std::numeric_limits<double>::max();
+    if (xPxAll.empty()) return std::numeric_limits<double>::max();
 
-    const double meanYPx = std::accumulate(yPxAll.begin(), yPxAll.end(), 0.0)
-                         / static_cast<double>(yPxAll.size());
-    params.y_ref = meanYPx + knownZ / params.scale_z;
+    const double meanXPx = std::accumulate(xPxAll.begin(), xPxAll.end(), 0.0)
+                         / static_cast<double>(xPxAll.size());
+    params.x_ref = meanXPx + knownZ / params.scale_z;
 
     double sse = 0.0;
-    for (double yp : yPxAll) {
-        const double err = (params.y_ref - yp) * params.scale_z - knownZ;
+    for (double xp : xPxAll) {
+        const double err = (params.x_ref - xp) * params.scale_z - knownZ;
         sse += err * err;
     }
-    return std::sqrt(sse / static_cast<double>(yPxAll.size()));
+    return std::sqrt(sse / static_cast<double>(xPxAll.size()));
 }
 
 } // namespace
