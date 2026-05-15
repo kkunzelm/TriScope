@@ -15,8 +15,8 @@ namespace scanner {
 // Geometry (Weber 1995, Gl. 1): laser projects a line in the scene Y-Z plane.
 // Camera views from triangulation angle Θ. Table moves along world X.
 //
-//   z_world = (y_ref - y_px) * scale_z      [mm]
-//   y_world = (x_px  - cx)   * scale_y      [mm]
+//   z_world = (y_ref - row_px) * scale_z    [mm]
+//   y_world = (cx    - col_px) * scale_y    [mm]
 //   x_world = table_x_mm
 //
 // scale_z = pixel_pitch_mm / (β · sin Θ)    [mm / pixel]
@@ -50,7 +50,7 @@ struct ZCalibPoint {
 
 // Determine scale_z and y_ref from 2+ Z calibration points.
 //
-// Model: row = y_ref + (-1 / scale_z) * z
+// Model: row = y_ref + (1 / scale_z) * z
 // Fit by least-squares linear regression. Only scale_z and y_ref are updated.
 CalibParams calibrateFromZPoints(std::span<const ZCalibPoint> points,
                                   CalibParams params);

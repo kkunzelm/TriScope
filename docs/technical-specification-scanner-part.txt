@@ -7,7 +7,7 @@ Here is the complete technical specification:
 
   This describes only the scanner-specific logic that sits on top of existing camera and XYZ-stage abstractions. The
   receiving application already has:
-  - A camera object that returns 16-bit monochrome frames (row-major, uint16_t[])
+  - A camera object that returns 8-bit monochrome frames (row-major, uint8_t[])
   - An XYZ controller that can move to absolute positions in mm and reports done asynchronously
   - These are accessed through interfaces similar to ICamera and IMotionControl described below
 
@@ -27,11 +27,11 @@ Here is the complete technical specification:
   ICamera (what the scanner calls)
 
   struct Frame {
-      std::vector<uint16_t> data;  // row-major, 16-bit mono
+      std::vector<uint8_t> data;  // row-major, 8-bit mono
       int width{0};
       int height{0};
       bool valid() const { return !data.empty() && width > 0 && height > 0; }
-      uint16_t pixel(int col, int row) const { return data[row * width + col]; }
+      uint8_t pixel(int col, int row) const { return data[row * width + col]; }
   };
 
   enum class AcquisitionMode { Continuous, SoftwareTrigger };
@@ -77,7 +77,7 @@ Here is the complete technical specification:
   JSON.
 
   struct CalibParams {
-      double theta_rad{0.349066}; // triangulation angle Θ (~20°) — informational only
+      double theta_rad{0.436332}; // triangulation angle Θ (~25°) — informational only
       double y_ref{512.0};        // camera row where laser line hits Z=0 reference plane
       double scale_z{0.050};      // mm per pixel in depth direction (from Z calibration)
       double scale_y{0.017};      // mm per pixel in lateral direction (from Y calibration)
@@ -85,7 +85,7 @@ Here is the complete technical specification:
   };
 
   JSON representation (loaded at startup with --calib-file):
-  { "theta_rad": 0.349, "y_ref": 512.0, "scale_z": 0.050, "scale_y": 0.017, "cx": 640.0 }
+  { "theta_rad": 0.436332, "y_ref": 512.0, "scale_z": 0.050, "scale_y": 0.017, "cx": 640.0 }
 
   ---
   4. Laser Line Extraction
@@ -96,9 +96,10 @@ Here is the complete technical specification:
   Output: LaserProfile — one double rowPosition per column; -1.0 means no valid laser in that column
 
   struct ExtractorParams {
-      uint16_t threshold{500};   // minimum pixel value; pixels below this are not laser
-      int      windowRows{0};    // CoG fallback only: restrict to ±N rows around peak; 0 = whole column
+      uint8_t    threshold{50};           // minimum pixel value to consider as laser (0–255)
+      int        windowRows{5};           // CoG fallback: restrict to ±windowRows around peak (0 = full column)
       PeakMethod method{PeakMethod::Gaussian};
+      double     medianRejectRows{50.0};  // post-filter: invalidate columns deviating more than this from the median (0 = disabled)
   };
 
   struct LaserProfile {
@@ -147,20 +148,20 @@ Here is the complete technical specification:
   from triangulation angle Θ. The table moves the object along world X.
 
   Forward projection (pixel → world):
-  z_world = (y_ref  - y_px)  * scale_z     [mm]
-  y_world = (x_px   - cx)    * scale_y     [mm]
+  z_world = (y_ref  - row_px) * scale_z     [mm]
+  y_world = (cx     - col_px) * scale_y     [mm]
   x_world = table_x_mm
 
   Where:
-  - y_px = subpixel row from laser line extractor (positive down)
-  - x_px = camera column index
+  - row_px = subpixel row from laser line extractor (positive down)
+  - col_px = camera column index
   - table_x_mm = current X position of the motion controller
   
   Implementation:
   // For each valid column in the LaserProfile:
   if (rowPositions[col] < 0.0) continue;
   double z = (calib.y_ref - rowPositions[col]) * calib.scale_z;
-  double y = (col         - calib.cx)          * calib.scale_y;
+  double y = (calib.cx   - col)                * calib.scale_y;
   // 3D point: (table_x_mm, y, z)
   
   One LaserProfile from a W-pixel-wide frame produces at most W 3D points per scan step.
@@ -180,7 +181,7 @@ Here is the complete technical specification:
   };
   
   Math (least-squares linear regression):
-  Model: row = a + b * z  where a = y_ref, b = -1 / scale_z
+  Model: row = a + b * z  where a = y_ref, b = 1 / scale_z
 
   n = number of calibration points (minimum 2)
   sum_z   = Σ zMm
@@ -193,7 +194,7 @@ Here is the complete technical specification:
   a = (sum_r - b * sum_z) / n
 
   y_ref   = a
-  scale_z = -1.0 / b          ← note: negative because row increases as z decreases
+  scale_z = 1.0 / b           ← positive: row increases as z increases (CCW rotation + lens inversion)
 
   Wizard motion sequence (as implemented):
   1. Capture frame at current Z = Z_base → point 1
@@ -287,7 +288,7 @@ Here is the complete technical specification:
   ├───────────────────┼─────────────────────────────────────────┼────────────────────┤
   │ Step size (mm)    │ QDoubleSpinBox                          │ 0.001 – 10.0       │
   ├───────────────────┼─────────────────────────────────────────┼────────────────────┤
-  │ Laser threshold   │ QSpinBox                                │ 0 – 65535 (16-bit) │
+  │ Laser threshold   │ QSpinBox                                │ 0 – 255 (8-bit)    │
   ├───────────────────┼─────────────────────────────────────────┼────────────────────┤
   │ Exposure (µs)     │ QDoubleSpinBox                          │ 10 – 100 000       │
   ├───────────────────┼─────────────────────────────────────────┼────────────────────┤
@@ -331,7 +332,7 @@ Here is the complete technical specification:
   File: interfaces/ICamera.h
   What it provides: Frame, CameraParams structs (adapt to your camera's frame format if different)
 
-  The only adaptation needed: if your camera already delivers a uint16_t[] row-major buffer, wrap it in the Frame
-  struct. If it delivers 8-bit, left-shift by 8 to produce 16-bit values (pixel16 = pixel8 << 8) — the extractor
-  threshold is then in the same 16-bit scale.
+  The only adaptation needed: if your camera already delivers a uint8_t[] row-major buffer, wrap it in the Frame
+  struct. If it delivers 16-bit, right-shift by 8 to downscale to 8-bit (pixel8 = pixel16 >> 8) — the extractor
+  threshold is then in the same 8-bit scale (0–255).
 

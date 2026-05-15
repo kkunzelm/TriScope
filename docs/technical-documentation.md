@@ -127,7 +127,7 @@ Forward projection (pixel → world):
 
 ```
 z_world = (y_ref  − row_px) × scale_z    [mm]
-y_world = (col_px − cx)     × scale_y    [mm]
+y_world = (cx     − col_px) × scale_y    [mm]
 x_world = table_x_mm
 ```
 
@@ -142,7 +142,37 @@ where β is the lens magnification and Θ is the triangulation angle. These are 
 
 The hardcoded `theta_rad = 0.436332` (25°) is stored in the saved JSON for documentation only. It is not used in any computation.
 
-### 5.2 Laser line extraction
+### 5.2 Frame rotation — scanner coordinate system
+
+**Physical camera image (live preview):**
+The camera is mounted so that the laser line runs **vertically** in the raw image (top → bottom, parallel to world Y). A change in surface height ΔZ shifts the laser stripe **horizontally** (left ↔ right) due to the triangulation angle.
+
+**Scanner frame (what the extractor and triangulator process):**
+Before any processing, `qImageToScannerFrame()` in `ScannerTab.cpp` converts the frame to 8-bit greyscale and rotates it **90° counter-clockwise**:
+
+```
+Raw camera image (live preview)        90° CCW rotation         Scanner frame (processing)
+                                   ──────────────────────►
++──────────────→ col               +──────────────→ col         col maps to world Y
+│  (world X, scan direction)       │  (world Y)
+│                                  │
+↓ row (world Y, laser extent)      ↓ row (world Z via Δ shift)  row maps to world Z
+
+Laser line: vertical  │            Laser line: horizontal  ──
+Z shift:    horizontal ←→          Z shift:    vertical    ↕
+```
+
+After the rotation:
+- **Columns** run along world Y → `y_world = (cx − col_px) × scale_y`
+- **Rows** encode world Z via the triangulation row shift → `z_world = (y_ref − row_px) × scale_z`
+
+All calibration parameters (`y_ref`, `scale_z`, `scale_y`, `cx`) are defined and measured in this rotated **scanner frame**, not in the raw camera image.
+
+**The live preview** always shows the **unrotated** camera image. The rotation is applied only in the scan acquisition path; the live-view path is unaffected.
+
+**Background and long-term outlook:** Due to a communication error during the initial implementation, the laser line extraction logic was written under the assumption that the laser line runs parallel to the X-axis — horizontally left-to-right on screen, yielding one row-peak per image column. When it was later clarified that the laser line actually runs parallel to the Y-axis — vertically top-to-bottom on screen — a 90° CCW rotation was introduced in `qImageToScannerFrame()` as a quick fix so that the existing column-by-column extraction routine could continue to be used without modification. Since the 3D output is now geometrically correct, the routine has been kept as-is. All documentation (formulas, calibration parameters, axis labels) describes the processing logic in the rotated scanner frame; the row/column assignments are only meaningful if the 90° rotation is mentally applied first. A future refactoring should eliminate the rotation by rewriting the extractor to operate directly on vertical laser lines — iterating over rows and returning one column position per row instead of one row position per column.
+
+### 5.3 Laser line extraction
 
 For each camera column, the extractor finds the sub-pixel row position of the laser line centroid.
 
@@ -170,7 +200,7 @@ Valid when `denom < −1e-10` and all three pixels are positive. Achieves approx
 | Moderate relief (dental crown) | 30–50 px |
 | Large steps or grooves | 100 px or more |
 
-### 5.3 Calibration parameters
+### 5.4 Calibration parameters
 
 | Parameter | Unit | Meaning | Calibrated by |
 |---|---|---|---|
@@ -179,34 +209,36 @@ Valid when `denom < −1e-10` and all three pixels are positive. Achieves approx
 | `scale_y` | mm/px | Lateral mm per camera column | Y wizard |
 | `cx` | px | Camera column mapping to world Y = 0 | Y wizard |
 
-### 5.4 Z calibration wizard
+### 5.5 Z calibration wizard
 
 Moves the stage through N steps of size Δz downward (−Z) while a flat diffuse surface sits under the laser. At each step one frame is grabbed and the mean valid laser row is recorded.
 
 Least-squares linear regression on the collected `(z_mm, row_mean)` pairs:
 
 ```
-model:    row = a + b·z    where  a = y_ref,  b = −1 / scale_z
-→  scale_z = −1 / b
+model:    row = a + b·z    where  a = y_ref,  b = 1 / scale_z
+→  scale_z = 1 / b
    y_ref   = a
 ```
 
-**Sign behaviour with negative working coordinates:** with z values such as `{−55, −56, −57}` mm, the regression is sign-agnostic. The result is a positive `scale_z` (the laser line moves to larger row numbers as Z decreases). `y_ref` is extrapolated to Z = 0 (the null switch position) and will be a large value well outside the sensor — for example:
+**Sign behaviour with negative working coordinates:** with z values such as `{−55, −56, −57}` mm, the regression is sign-agnostic. After CCW rotation and lens inversion, the result is a positive `scale_z` (the laser line moves to **larger** row numbers as Z **increases**). `y_ref` is extrapolated to Z = 0 (the software origin) and will typically be a large positive value outside the normal operating range of the sensor — for example:
 
 ```
-y_ref ≈ row_at_working_z + z_working / scale_z
-      ≈ 400 + (−55) / 0.05  =  −700 px
+y_ref ≈ row_at_working_z − z_working / scale_z
+      ≈ 400 − (−55) / 0.05  =  1500 px
 ```
 
-This is correct and expected. The projection formula gives the right Z:
+This is correct and expected. The projection formula gives the surface depth:
 
 ```
-z_world = (−700 − 400) × 0.05 = −55 mm  ✓
+z_world = (1500 − 400) × 0.05 = 55 mm  ✓
 ```
+
+Note: `z_world` is in the triangulation coordinate system where depth increases away from the objective. Its magnitude equals the distance of the surface from the software origin; its sign is **opposite** to the stage z convention (stage working positions are negative, `z_world` is positive). For relative surface height — the quantity relevant to scanning — this has no effect: height differences between scan points are always correct.
 
 `scale_z` is fit directly from the regression slope and is accurate. `y_ref` uncertainty grows with extrapolation distance to Z = 0, but since scans measure relative surface height (not absolute Z from the null switch), this does not affect scan quality.
 
-### 5.5 Y calibration wizard
+### 5.6 Y calibration wizard
 
 One frame is grabbed with a reference object of known physical width W straddling the optical axis. The wizard detects the two edge columns from the steepest gradients in the laser profile row positions, then:
 
@@ -217,12 +249,12 @@ cx      = (col_left + col_right) / 2   [px]
 
 Suitable calibration objects: gauge blocks, precision-ground slots, calibration bars with parallel edges at a certified distance.
 
-### 5.6 Stop-and-go scan loop
+### 5.7 Stop-and-go scan loop
 
 The acquisition thread is stopped for the duration of a scan. The GUI receives `movementFinished()` from the stage thread; the scan slot `onStepReady()` then:
 
 1. Calls `grabFreshFrame()` — flushes any buffered V4L2 frames (stale from before the move), then grabs one fresh frame with a 2 s timeout
-2. Converts the frame to 8-bit (`Format_Grayscale8`)
+2. Converts to 8-bit greyscale and rotates 90° CCW into the scanner coordinate frame (`qImageToScannerFrame()` — see §5.2)
 3. Runs `extractLaserProfile()` with current threshold and scatter settings
 4. Calls `projectTo3D()` to accumulate 3D points
 5. Emits `previewFrameReady(img)` so the CameraView shows the grabbed frame at each step
@@ -230,7 +262,7 @@ The acquisition thread is stopped for the duration of a scan. The GUI receives `
 
 At scan end, `PlyWriter` writes the accumulated point cloud to a binary little-endian PLY file (3 × float32 per vertex, coordinates in mm).
 
-### 5.7 Intensity threshold
+### 5.8 Intensity threshold
 
 The threshold spinbox (0–255, 8-bit) sets the minimum pixel value that qualifies as laser return. Use the **Histogram** dialog to choose a value: set the threshold just above the ambient-light floor so laser pixels pass and background pixels are rejected. The red line in the histogram shows the current threshold value.
 
