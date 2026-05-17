@@ -6,6 +6,7 @@
 #include "scanner/processing/LaserLineExtractor.h"
 #include "scanner/processing/Triangulator.h"
 #include "scanner/export/PlyWriter.h"
+#include "scanner/export/XvWriter.h"
 
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -346,11 +347,12 @@ void ScannerTab::buildUI()
     m_outputLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto *browseBtn = new QPushButton(tr("Browse…"));
     connect(browseBtn, &QPushButton::clicked, this, &ScannerTab::onBrowseOutput);
-    m_plyFormatCombo = new QComboBox;
-    m_plyFormatCombo->addItem(tr("Binary"), static_cast<int>(scanner::PlyFormat::BinaryLittleEndian));
-    m_plyFormatCombo->addItem(tr("ASCII"),     static_cast<int>(scanner::PlyFormat::Ascii));
+    m_exportFormatCombo = new QComboBox;
+    m_exportFormatCombo->addItem(tr("PLY Binary"), static_cast<int>(ExportFormat::PlyBinary));
+    m_exportFormatCombo->addItem(tr("PLY ASCII"),  static_cast<int>(ExportFormat::PlyAscii));
+    m_exportFormatCombo->addItem(tr("VIFF (.xv)"), static_cast<int>(ExportFormat::Viff));
     outLayout->addWidget(m_outputLabel, 1);
-    outLayout->addWidget(m_plyFormatCombo);
+    outLayout->addWidget(m_exportFormatCombo);
     outLayout->addWidget(browseBtn);
 
     // ── Calibration ─────────────────────────────────────────────────────────
@@ -665,12 +667,22 @@ void ScannerTab::finishScan()
     m_startBtn->setText(tr("Start Scan"));
 
     const QString outPath = m_outputLabel->text();
+    const auto fmt = static_cast<ExportFormat>(m_exportFormatCombo->currentData().toInt());
     try {
-        scanner::PlyWriter writer;
-        writer.write(
-            std::span<const Eigen::Vector3d>(m_cloud.data(), m_cloud.size()),
-            std::filesystem::path(outPath.toStdString()),
-            static_cast<scanner::PlyFormat>(m_plyFormatCombo->currentData().toInt()));
+        const auto cloudSpan = std::span<const Eigen::Vector3d>(m_cloud.data(), m_cloud.size());
+        if (fmt == ExportFormat::Viff) {
+            scanner::XvWriter::Params params;
+            params.xStepMm  = m_stepSpin->value();
+            params.scaleYMm = m_scaleYSpin->value();
+            scanner::XvWriter writer;
+            writer.write(cloudSpan, params, std::filesystem::path(outPath.toStdString()));
+        } else {
+            const auto plyFmt = (fmt == ExportFormat::PlyAscii)
+                ? scanner::PlyFormat::Ascii
+                : scanner::PlyFormat::BinaryLittleEndian;
+            scanner::PlyWriter writer;
+            writer.write(cloudSpan, std::filesystem::path(outPath.toStdString()), plyFmt);
+        }
         m_statusLabel->setText(
             tr("Done. %1 points → %2").arg(m_cloud.size()).arg(outPath));
     } catch (const std::exception &e) {
@@ -686,9 +698,12 @@ void ScannerTab::finishScan()
 
 void ScannerTab::onBrowseOutput()
 {
+    const auto fmt = static_cast<ExportFormat>(m_exportFormatCombo->currentData().toInt());
+    const bool isViff = (fmt == ExportFormat::Viff);
     const QString path = QFileDialog::getSaveFileName(
-        this, tr("Save Point Cloud"), QStringLiteral("scan.ply"),
-        tr("PLY files (*.ply)"));
+        this, tr("Save Point Cloud"),
+        isViff ? QStringLiteral("scan.xv")  : QStringLiteral("scan.ply"),
+        isViff ? tr("VIFF files (*.xv)")    : tr("PLY files (*.ply)"));
     if (!path.isEmpty())
         m_outputLabel->setText(path);
 }

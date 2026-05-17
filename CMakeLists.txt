@@ -76,6 +76,8 @@ set(SOURCES
     src/scanner/processing/LaserLineExtractor.cpp
     src/scanner/processing/Triangulator.cpp
     src/scanner/export/PlyWriter.cpp
+    src/scanner/export/XvWriter.cpp
+    src/io/ViffWriter.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})

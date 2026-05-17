@@ -94,8 +94,8 @@ private:
     QSpinBox       *m_threshSpin    = nullptr;
     QDoubleSpinBox *m_expSpin       = nullptr;
     QDoubleSpinBox *m_scatterSpin   = nullptr;
-    QLabel         *m_outputLabel    = nullptr;
-    QComboBox      *m_plyFormatCombo = nullptr;
+    QLabel         *m_outputLabel       = nullptr;
+    QComboBox      *m_exportFormatCombo = nullptr;
     QDoubleSpinBox *m_xRefSpin    = nullptr;
     QDoubleSpinBox *m_scaleZSpin  = nullptr;
     QDoubleSpinBox *m_scaleYSpin  = nullptr;
@@ -114,6 +114,8 @@ private:
     ICameraDevice     *m_camera    = nullptr;
     AcquisitionThread *m_acqThread = nullptr;
     IPositioningStage *m_stage     = nullptr;
+
+    enum class ExportFormat { PlyBinary = 0, PlyAscii = 1, Viff = 2 };
 
     // ── Calibration state ────────────────────────────────────────────────────
     enum class CalibMode { None, CalibZ };
